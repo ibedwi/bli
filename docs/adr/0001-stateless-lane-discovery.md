@@ -1,0 +1,3 @@
+# bli keeps no state: lanes are rediscovered from branch names
+
+`bli` never stores lane records or lane host IDs. Every command rediscovers lanes by asking the lane host for its live list and matching branches against the configured branch pattern (default `ticket/{id}-{slug}`), reading the ticket ID back out of the branch name. Host identifiers don't survive across hosts or even across restarts (herdr names agents, Superset uses workspace UUIDs plus session IDs, Orca's terminal handles go stale when it restarts), while the branch is the one identity every host and git agree on. The cost: a lane on a branch that doesn't match the pattern is invisible to `bli`, and changing the pattern in `bli.toml` orphans existing lanes.
