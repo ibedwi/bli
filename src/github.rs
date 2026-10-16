@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::error::Error;
 use crate::process::ProcessRunner;
-use crate::tracker::{IssueTracker, Ticket};
+use crate::tracker::{IssueTracker, Ticket, TicketDetails};
 
 pub struct GitHub<R> {
     runner: R,
@@ -54,6 +54,35 @@ impl<R: ProcessRunner> IssueTracker for GitHub<R> {
             })
             .collect())
     }
+
+    fn ticket(&self, id: &str) -> Result<TicketDetails, Error> {
+        let number = issue_number(id)?.to_string();
+        let stdout = self.gh(&[
+            "issue",
+            "view",
+            &number,
+            "--json",
+            "number,title,url,state,assignees",
+        ])?;
+        let view: IssueView = serde_json::from_str(&stdout)
+            .map_err(|e| Error::new(format!("could not read `gh issue view` output: {e}")))?;
+        Ok(TicketDetails {
+            ticket: Ticket {
+                id: view.number.to_string(),
+                title: view.title,
+                url: view.url,
+            },
+            open: view.state == "OPEN",
+            assignees: view.assignees.into_iter().map(|a| a.login).collect(),
+        })
+    }
+
+    /// On GitHub, a ticket is claimed by assigning it.
+    fn claim(&self, id: &str) -> Result<(), Error> {
+        let number = issue_number(id)?.to_string();
+        self.gh(&["issue", "edit", &number, "--add-assignee", "@me"])
+            .map(drop)
+    }
 }
 
 /// A GitHub ticket ID is an issue number, optionally written `#12`.
@@ -89,4 +118,19 @@ impl Issue {
 #[derive(Deserialize)]
 struct DependenciesSummary {
     blocked_by: u64,
+}
+
+/// `gh issue view --json` output, which spells fields differently from the REST API.
+#[derive(Deserialize)]
+struct IssueView {
+    number: u64,
+    title: String,
+    url: String,
+    state: String,
+    assignees: Vec<Assignee>,
+}
+
+#[derive(Deserialize)]
+struct Assignee {
+    login: String,
 }

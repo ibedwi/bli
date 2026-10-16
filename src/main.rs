@@ -1,9 +1,11 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use bli::config::{Config, TrackerKind};
+use bli::config::{Config, HostKind, TrackerKind};
 use bli::error::Error;
 use bli::github::GitHub;
+use bli::herdr::Herdr;
+use bli::host::LaneHost;
 use bli::process::SystemRunner;
 use bli::tracker::IssueTracker;
 use bli::Providers;
@@ -19,6 +21,17 @@ impl Providers for System {
                 Err(Error::new("the ClickUp issue tracker is not supported yet")
                     .with_hint("set `kind = \"github\"` under [tracker] in bli.toml"))
             }
+        }
+    }
+
+    fn lane_host(&self, config: &Config) -> Result<Box<dyn LaneHost + '_>, Error> {
+        match config.lane.host {
+            HostKind::Herdr => {
+                let herdr_env = std::env::var("HERDR_ENV").ok();
+                Ok(Box::new(Herdr::new(SystemRunner, herdr_env.as_deref())))
+            }
+            HostKind::Superset => Err(Error::new("the Superset lane host is not supported yet")
+                .with_hint("set `host = \"herdr\"` under [lane] in bli.toml")),
         }
     }
 }

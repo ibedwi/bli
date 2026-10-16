@@ -1,82 +1,39 @@
 //! Seam 1: the command layer. Runs `bli` commands against a fake issue tracker,
-//! in a temporary repo with a real `bli.toml`, and checks output and exit code.
+//! in a temporary git repo with a real `bli.toml`, and checks output and exit code.
 
-use std::collections::HashMap;
-use std::path::Path;
+mod common;
 
-use bli::config::Config;
-use bli::error::Error;
-use bli::tracker::{IssueTracker, Ticket};
-use bli::{Outcome, Providers};
+use bli::host::StatusHint;
+use common::*;
 use serde_json::json;
-use tempfile::TempDir;
 
-/// An issue tracker whose frontier under each parent is fixed up front.
-#[derive(Default)]
-struct FakeTracker {
-    frontiers: HashMap<String, Vec<Ticket>>,
-}
-
-impl FakeTracker {
-    fn with_frontier(mut self, parent: &str, tickets: &[(&str, &str)]) -> Self {
-        let tickets = tickets
-            .iter()
-            .map(|(id, title)| Ticket {
-                id: id.to_string(),
-                title: title.to_string(),
-                url: format!("https://tracker.test/{id}"),
-            })
-            .collect();
-        self.frontiers.insert(parent.to_string(), tickets);
-        self
+/// A repo with the given `bli.toml`, or none.
+fn repo(bli_toml: Option<&str>) -> Repo {
+    let repo = Repo::new(bli_toml.unwrap_or(GITHUB));
+    if bli_toml.is_none() {
+        std::fs::remove_file(repo.path().join("bli.toml")).unwrap();
     }
+    repo
 }
 
-impl IssueTracker for FakeTracker {
-    fn frontier(&self, parent: &str) -> Result<Vec<Ticket>, Error> {
-        self.frontiers
-            .get(parent)
-            .cloned()
-            .ok_or_else(|| Error::new(format!("no ticket {parent}")))
+fn with_tracker(tracker: FakeTracker) -> Fakes {
+    Fakes {
+        tracker,
+        ..Default::default()
     }
-}
-
-impl Providers for FakeTracker {
-    fn issue_tracker(&self, _config: &Config) -> Result<Box<dyn IssueTracker + '_>, Error> {
-        Ok(Box::new(self))
-    }
-}
-
-/// A repo checkout with the given `bli.toml`, or none.
-fn repo(bli_toml: Option<&str>) -> TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join(".git")).unwrap();
-    if let Some(toml) = bli_toml {
-        std::fs::write(dir.path().join("bli.toml"), toml).unwrap();
-    }
-    dir
-}
-
-const GITHUB: &str = "[tracker]\nkind = \"github\"\n";
-
-fn bli(args: &[&str], cwd: &Path, tracker: &FakeTracker) -> Outcome {
-    bli::run(args, cwd, tracker)
-}
-
-fn json(out: &Outcome) -> serde_json::Value {
-    assert_eq!(out.code, 0, "stderr: {}", out.stderr);
-    serde_json::from_str(&out.stdout).unwrap()
 }
 
 #[test]
 fn frontier_json_lists_each_tickets_id_title_and_url() {
     let repo = repo(Some(GITHUB));
-    let tracker = FakeTracker::default().with_frontier("1", &[("3", "Fan-out"), ("7", "Doctor")]);
+    let fakes = with_tracker(
+        FakeTracker::default().with_frontier("1", &[("3", "Fan-out"), ("7", "Doctor")]),
+    );
 
     let out = bli(
         &["frontier", "--parent", "1", "--json"],
         repo.path(),
-        &tracker,
+        &fakes,
     );
 
     assert_eq!(
@@ -95,9 +52,11 @@ fn frontier_json_lists_each_tickets_id_title_and_url() {
 #[test]
 fn frontier_prints_a_readable_list() {
     let repo = repo(Some(GITHUB));
-    let tracker = FakeTracker::default().with_frontier("1", &[("3", "Fan-out"), ("7", "Doctor")]);
+    let fakes = with_tracker(
+        FakeTracker::default().with_frontier("1", &[("3", "Fan-out"), ("7", "Doctor")]),
+    );
 
-    let out = bli(&["frontier", "--parent", "1"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--parent", "1"], repo.path(), &fakes);
 
     assert_eq!(out.code, 0, "stderr: {}", out.stderr);
     assert_eq!(
@@ -109,9 +68,9 @@ fn frontier_prints_a_readable_list() {
 #[test]
 fn frontier_says_so_when_nothing_can_start() {
     let repo = repo(Some(GITHUB));
-    let tracker = FakeTracker::default().with_frontier("1", &[]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("1", &[]));
 
-    let out = bli(&["frontier", "--parent", "1"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--parent", "1"], repo.path(), &fakes);
 
     assert_eq!(out.code, 0, "stderr: {}", out.stderr);
     assert_eq!(out.stdout, "No tickets on the frontier of 1.\n");
@@ -120,11 +79,13 @@ fn frontier_says_so_when_nothing_can_start() {
 #[test]
 fn frontier_uses_the_configured_parent_when_none_is_given() {
     let repo = repo(Some("[tracker]\nkind = \"github\"\nparent = \"17\"\n"));
-    let tracker = FakeTracker::default()
-        .with_frontier("1", &[("3", "Wrong effort")])
-        .with_frontier("17", &[("20", "Right effort")]);
+    let fakes = with_tracker(
+        FakeTracker::default()
+            .with_frontier("1", &[("3", "Wrong effort")])
+            .with_frontier("17", &[("20", "Right effort")]),
+    );
 
-    let out = bli(&["frontier", "--json"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
 
     assert_eq!(json(&out)["parent"], "17");
     assert_eq!(json(&out)["tickets"][0]["id"], "20");
@@ -133,9 +94,9 @@ fn frontier_uses_the_configured_parent_when_none_is_given() {
 #[test]
 fn frontier_accepts_a_numeric_configured_parent() {
     let repo = repo(Some("[tracker]\nkind = \"github\"\nparent = 17\n"));
-    let tracker = FakeTracker::default().with_frontier("17", &[("20", "Right effort")]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("17", &[("20", "Right effort")]));
 
-    let out = bli(&["frontier", "--json"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
 
     assert_eq!(json(&out)["parent"], "17");
 }
@@ -143,14 +104,16 @@ fn frontier_accepts_a_numeric_configured_parent() {
 #[test]
 fn frontier_parent_flag_overrides_the_configured_parent() {
     let repo = repo(Some("[tracker]\nkind = \"github\"\nparent = \"17\"\n"));
-    let tracker = FakeTracker::default()
-        .with_frontier("1", &[("3", "Chosen")])
-        .with_frontier("17", &[("20", "Default")]);
+    let fakes = with_tracker(
+        FakeTracker::default()
+            .with_frontier("1", &[("3", "Chosen")])
+            .with_frontier("17", &[("20", "Default")]),
+    );
 
     let out = bli(
         &["frontier", "--parent", "1", "--json"],
         repo.path(),
-        &tracker,
+        &fakes,
     );
 
     assert_eq!(json(&out)["tickets"][0]["id"], "3");
@@ -159,9 +122,9 @@ fn frontier_parent_flag_overrides_the_configured_parent() {
 #[test]
 fn frontier_without_any_parent_fails_with_a_hint() {
     let repo = repo(Some(GITHUB));
-    let tracker = FakeTracker::default();
+    let fakes = with_tracker(FakeTracker::default());
 
-    let out = bli(&["frontier", "--json"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
 
     assert_ne!(out.code, 0);
     assert_eq!(out.stdout, "");
@@ -172,9 +135,9 @@ fn frontier_without_any_parent_fails_with_a_hint() {
 #[test]
 fn any_command_without_bli_toml_fails_with_a_hint() {
     let repo = repo(None);
-    let tracker = FakeTracker::default().with_frontier("1", &[]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("1", &[]));
 
-    let out = bli(&["frontier", "--parent", "1"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--parent", "1"], repo.path(), &fakes);
 
     assert_ne!(out.code, 0);
     assert_eq!(out.stdout, "");
@@ -187,9 +150,9 @@ fn bli_toml_is_found_from_a_subdirectory_of_the_checkout() {
     let repo = repo(Some(GITHUB));
     let sub = repo.path().join("src/deep");
     std::fs::create_dir_all(&sub).unwrap();
-    let tracker = FakeTracker::default().with_frontier("1", &[("3", "Fan-out")]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("1", &[("3", "Fan-out")]));
 
-    let out = bli(&["frontier", "--parent", "1", "--json"], &sub, &tracker);
+    let out = bli(&["frontier", "--parent", "1", "--json"], &sub, &fakes);
 
     assert_eq!(json(&out)["tickets"][0]["id"], "3");
 }
@@ -198,10 +161,10 @@ fn bli_toml_is_found_from_a_subdirectory_of_the_checkout() {
 fn bli_toml_outside_the_checkout_is_not_used() {
     let outer = repo(Some(GITHUB));
     let inner = outer.path().join("nested-repo");
-    std::fs::create_dir_all(inner.join(".git")).unwrap();
-    let tracker = FakeTracker::default().with_frontier("1", &[]);
+    git(outer.path(), &["init", "-q", "nested-repo"]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("1", &[]));
 
-    let out = bli(&["frontier", "--parent", "1"], &inner, &tracker);
+    let out = bli(&["frontier", "--parent", "1"], &inner, &fakes);
 
     assert_ne!(out.code, 0);
     assert!(out.stderr.contains("bli.toml"), "{}", out.stderr);
@@ -210,9 +173,9 @@ fn bli_toml_outside_the_checkout_is_not_used() {
 #[test]
 fn an_unknown_tracker_kind_is_rejected() {
     let repo = repo(Some("[tracker]\nkind = \"jira\"\n"));
-    let tracker = FakeTracker::default().with_frontier("1", &[]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("1", &[]));
 
-    let out = bli(&["frontier", "--parent", "1"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--parent", "1"], repo.path(), &fakes);
 
     assert_ne!(out.code, 0);
     assert!(out.stderr.contains("jira"), "{}", out.stderr);
@@ -221,12 +184,12 @@ fn an_unknown_tracker_kind_is_rejected() {
 #[test]
 fn tracker_errors_go_to_stderr_with_a_nonzero_exit_even_with_json() {
     let repo = repo(Some(GITHUB));
-    let tracker = FakeTracker::default();
+    let fakes = with_tracker(FakeTracker::default());
 
     let out = bli(
         &["frontier", "--parent", "404", "--json"],
         repo.path(),
-        &tracker,
+        &fakes,
     );
 
     assert_ne!(out.code, 0);
@@ -237,9 +200,9 @@ fn tracker_errors_go_to_stderr_with_a_nonzero_exit_even_with_json() {
 #[test]
 fn unknown_arguments_fail_on_stderr() {
     let repo = repo(Some(GITHUB));
-    let tracker = FakeTracker::default();
+    let fakes = with_tracker(FakeTracker::default());
 
-    let out = bli(&["frontier", "--bogus"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--bogus"], repo.path(), &fakes);
 
     assert_ne!(out.code, 0);
     assert_eq!(out.stdout, "");
@@ -249,11 +212,36 @@ fn unknown_arguments_fail_on_stderr() {
 #[test]
 fn bli_toml_without_a_tracker_fails_with_a_hint() {
     let repo = repo(Some("[lane]\nbase = \"main\"\n"));
-    let tracker = FakeTracker::default().with_frontier("1", &[]);
+    let fakes = with_tracker(FakeTracker::default().with_frontier("1", &[]));
 
-    let out = bli(&["frontier", "--parent", "1"], repo.path(), &tracker);
+    let out = bli(&["frontier", "--parent", "1"], repo.path(), &fakes);
 
     assert_ne!(out.code, 0);
     assert!(out.stderr.contains("hint:"), "{}", out.stderr);
     assert!(out.stderr.contains("[tracker]"), "{}", out.stderr);
+}
+
+#[test]
+fn frontier_leaves_out_tickets_that_already_have_a_lane() {
+    let repo = repo(Some(GITHUB));
+    let fakes = Fakes {
+        tracker: FakeTracker::default().with_frontier("1", &[("3", "Fan-out"), ("7", "Doctor")]),
+        host: FakeHost::default()
+            .with_main_checkout("main")
+            .with_checkout("ticket/3-fan-out", StatusHint::Working)
+            .with_checkout("scratch/7-not-a-lane", StatusHint::Idle),
+    };
+
+    let out = bli(
+        &["frontier", "--parent", "1", "--json"],
+        repo.path(),
+        &fakes,
+    );
+
+    assert_eq!(
+        json(&out)["tickets"],
+        json!([
+            {"id": "7", "title": "Doctor", "url": "https://tracker.test/7"}
+        ])
+    );
 }

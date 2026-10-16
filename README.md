@@ -16,13 +16,25 @@ Develop with `nix develop`, then `cargo test`.
 Each repo commits a `bli.toml` at its root:
 
 ```toml
+[lane]                              # optional; these are the defaults
+host   = "herdr"                    # herdr
+base   = "main"                     # the branch lanes are cut from, on origin
+branch = "ticket/{id}-{slug}"       # lane branch names; must contain {id}
+prompt = "/implement {ticket_url}"  # the agent's first prompt
+
 [tracker]
 kind   = "github"   # github
 parent = 1          # optional default parent for `bli frontier`
 ```
 
+`bli` keeps no state: lanes are found by matching the lane host's live list against `branch` (ADR 0001), so changing the pattern hides existing lanes.
+
 ## Commands
 
-- `bli frontier [--parent <id>] [--json]`: the tickets under a parent that are open, unblocked and unclaimed. `--json` prints `{"parent": "<id>", "tickets": [{"id", "title", "url"}]}`.
+- `bli frontier [--parent <id>] [--json]`: the tickets under a parent that are open, unblocked, unclaimed and have no lane. `--json` prints `{"parent": "<id>", "tickets": [{"id", "title", "url"}]}`.
+- `bli lane start <id>... [--base <branch>] [--slug <slug>] [--json]`: from inside the lane host, fetches `origin`, then for each ticket in turn creates a lane on a new branch from `origin/<base>`, records the base as `git config branch.<branch>.bliBase`, starts Claude in bypass-permissions mode with the configured prompt, and claims the ticket. Tickets with a lane or a claim are skipped. The slug is the first five words of the title in kebab-case; `--slug` overrides it for a single ticket. `--json` prints `{"base", "lanes": [{"ticket", "title", "url", "outcome", "branch", "base", "path", "workspace", "status", "reason", "error"}]}`, where `outcome` is `started`, `skipped` or `failed` and absent fields are left out. One lane failing doesn't stop the rest, and the exit code is 0 once every ticket has an outcome.
+- `bli lane list [--json]`: every lane, from the lane host's live list. `--json` prints `{"lanes": [{"ticket", "branch", "base", "path", "workspace", "status"}]}`.
+
+`status` is the lane host's hint about the agent (`working`, `blocked`, `idle` or `unknown`), not a verdict.
 
 Errors go to stderr with a non-zero exit. `bli` never prompts.

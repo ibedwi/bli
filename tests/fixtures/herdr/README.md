@@ -1,0 +1,11 @@
+# Saved herdr output
+
+Real output of herdr 0.9.3, saved 2026-10-16 using a throwaway `scratch/bli-fixture` lane, removed afterwards.
+
+- `worktree_create.json`: `herdr worktree create --cwd <main checkout> --branch scratch/bli-fixture --base origin/main --label "#0 bli-fixture" --no-focus --trust-repository`.
+- `worktree_list.json`: `herdr worktree list --cwd <main checkout>` with the main checkout, the scratch lane, and the `ticket/3-fan-out-on-herdr` lane.
+- `agent_list.json`: `herdr agent list`, with agent `t3` working in workspace `w2`.
+- `agent_wait.json`: `herdr agent wait t3 --until working --timeout 2000`.
+- `error_agent_not_found.json`: the stderr of `herdr agent wait` on an unknown agent. herdr reports errors this way, as JSON on stderr with a non-zero exit.
+
+`herdr worktree create --cwd <linked worktree>` fails with `linked_worktree_source`, which is why `bli` always passes the main checkout.

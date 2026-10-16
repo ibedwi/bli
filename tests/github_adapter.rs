@@ -6,7 +6,7 @@ use std::io;
 
 use bli::github::GitHub;
 use bli::process::{Output, ProcessRunner};
-use bli::tracker::{IssueTracker, Ticket};
+use bli::tracker::{IssueTracker, Ticket, TicketDetails};
 
 /// Records every command it is asked to run and answers with a canned output.
 struct FakeRunner {
@@ -125,4 +125,82 @@ fn frontier_hints_at_installing_gh_when_it_is_missing() {
     let runner = FakeRunner::with(Err(io::Error::new(io::ErrorKind::NotFound, "no gh")));
     let err = GitHub::new(&runner).frontier("1").unwrap_err();
     assert!(err.hint().unwrap().contains("gh"), "{err:?}");
+}
+
+#[test]
+fn ticket_views_the_issue_through_gh() {
+    let runner = FakeRunner::replying(&fixture("issue_unclaimed.json"));
+    GitHub::new(&runner).ticket("#4").unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![vec![
+            "gh",
+            "issue",
+            "view",
+            "4",
+            "--json",
+            "number,title,url,state,assignees"
+        ]]
+    );
+}
+
+#[test]
+fn ticket_reads_an_unclaimed_open_issue() {
+    let runner = FakeRunner::replying(&fixture("issue_unclaimed.json"));
+    let ticket = GitHub::new(&runner).ticket("4").unwrap();
+    assert_eq!(
+        ticket,
+        TicketDetails {
+            ticket: Ticket {
+                id: "4".into(),
+                title: "Remove-lane: lane inspect, lane rm, remove-lane skill".into(),
+                url: "https://github.com/ibedwi/bli/issues/4".into(),
+            },
+            open: true,
+            assignees: vec![],
+        }
+    );
+}
+
+#[test]
+fn ticket_reads_a_claimed_issues_assignee_logins() {
+    let runner = FakeRunner::replying(&fixture("issue_claimed.json"));
+    let ticket = GitHub::new(&runner).ticket("3").unwrap();
+    assert_eq!(ticket.assignees, vec!["ibedwi"]);
+}
+
+#[test]
+fn ticket_reads_a_closed_issue_as_not_open() {
+    let closed = fixture("issue_unclaimed.json").replace("\"OPEN\"", "\"CLOSED\"");
+    let runner = FakeRunner::replying(&closed);
+    assert!(!GitHub::new(&runner).ticket("4").unwrap().open);
+}
+
+#[test]
+fn ticket_rejects_an_id_that_is_not_an_issue_number_without_calling_gh() {
+    let runner = FakeRunner::replying("{}");
+    let err = GitHub::new(&runner).ticket("CU-42").unwrap_err();
+    assert!(err.to_string().contains("CU-42"), "{err}");
+    assert_eq!(runner.calls(), Vec::<Vec<String>>::new());
+}
+
+#[test]
+fn claim_assigns_the_issue_to_the_current_user() {
+    let runner = FakeRunner::replying("https://github.com/ibedwi/bli/issues/4\n");
+    GitHub::new(&runner).claim("#4").unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![vec!["gh", "issue", "edit", "4", "--add-assignee", "@me"]]
+    );
+}
+
+#[test]
+fn claim_reports_gh_failure_with_its_stderr() {
+    let runner = FakeRunner::with(Ok(Output {
+        success: false,
+        stdout: String::new(),
+        stderr: "GraphQL: Could not resolve to an issue".into(),
+    }));
+    let err = GitHub::new(&runner).claim("4").unwrap_err();
+    assert!(err.to_string().contains("Could not resolve"), "{err}");
 }

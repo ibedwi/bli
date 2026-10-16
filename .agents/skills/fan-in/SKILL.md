@@ -21,7 +21,7 @@ herdr worktree list --cwd "$root"   # lanes: worktrees whose branch starts with 
 herdr agent list      # each t<n> agent's state
 ```
 
-For each lane, take the ticket number `n` from the branch name, plus its workspace ID, checkout path and agent state. Read its **base** from `git config branch.<branch>.fanOutBase`, which `/fan-out` records; when unset, the base is `main`. Also look up its PR: `gh pr list --head <branch> --state all --json number,state,url`.
+For each lane, take the ticket number `n` from the branch name, plus its workspace ID, checkout path and agent state. Read its **base** from `git config branch.<branch>.bliBase`, which `bli lane start` records (lanes started before `bli` have `fanOutBase` instead); when neither is set, the base is `main`. Also look up its PR: `gh pr list --head <branch> --state all --json number,state,url`.
 
 ## 3. Act on each lane by state
 
