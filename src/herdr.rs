@@ -1,0 +1,265 @@
+//! herdr as the lane host, through the `herdr` CLI. A lane is a herdr worktree
+//! workspace, and its agent is a Claude named `t<ticket id>` in the workspace's root pane.
+
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::Deserialize;
+
+use crate::error::Error;
+use crate::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
+use crate::process::ProcessRunner;
+
+/// How long to wait for a new agent to start working before reporting its status as unknown.
+const START_TIMEOUT_MS: &str = "20000";
+
+pub struct Herdr<R> {
+    runner: R,
+    inside: bool,
+}
+
+impl<R: ProcessRunner> Herdr<R> {
+    /// `herdr_env` is the value of `HERDR_ENV`, which herdr sets to `1` in its panes.
+    pub fn new(runner: R, herdr_env: Option<&str>) -> Self {
+        Herdr {
+            runner,
+            inside: herdr_env == Some("1"),
+        }
+    }
+
+    /// Runs `herdr` with `args` and returns the `result` of its JSON reply.
+    fn herdr<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Error> {
+        self.try_herdr(args)?.map_err(|e| {
+            Error::new(format!(
+                "`{}` failed: {} ({})",
+                command(args),
+                e.message,
+                e.code
+            ))
+        })
+    }
+
+    /// Like [`Herdr::herdr`], but hands back an error herdr itself reported, for the caller to inspect.
+    fn try_herdr<T: DeserializeOwned>(&self, args: &[&str]) -> Result<Result<T, ErrorBody>, Error> {
+        let command = command(args);
+        let out = self.runner.run("herdr", args).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => Error::new("could not run `herdr`: it is not installed")
+                .with_hint(
+                    "install herdr (https://herdr.dev), or change `host` under [lane] in bli.toml",
+                ),
+            _ => Error::new(format!("could not run `herdr`: {e}")),
+        })?;
+        if !out.success {
+            return match serde_json::from_str::<ErrorReply>(&out.stderr) {
+                Ok(reply) => Ok(Err(reply.error)),
+                Err(_) => Err(Error::new(format!(
+                    "`{command}` failed: {}",
+                    out.stderr.trim()
+                ))),
+            };
+        }
+        serde_json::from_str::<Reply<T>>(&out.stdout)
+            .map(|reply| Ok(reply.result))
+            .map_err(|e| Error::new(format!("could not read `{command}` output: {e}")))
+    }
+
+    /// Like [`Herdr::herdr`], for commands whose reply `bli` doesn't need.
+    fn herdr_unit(&self, args: &[&str]) -> Result<(), Error> {
+        self.herdr::<IgnoredAny>(args).map(drop)
+    }
+}
+
+impl<R: ProcessRunner> LaneHost for Herdr<R> {
+    fn name(&self) -> &str {
+        "herdr"
+    }
+
+    fn is_inside(&self) -> bool {
+        self.inside
+    }
+
+    fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error> {
+        // herdr only creates worktrees from the main checkout, never from a linked one.
+        let repo = repo.to_string_lossy();
+        let created: WorktreeCreated = self.herdr(&[
+            "worktree",
+            "create",
+            "--cwd",
+            &repo,
+            "--branch",
+            &lane.branch,
+            "--base",
+            &lane.base_ref,
+            "--label",
+            &lane.label,
+            "--no-focus",
+            "--trust-repository",
+        ])?;
+        Ok(CreatedLane {
+            path: created.worktree.path,
+            workspace: created.workspace.workspace_id,
+            handle: created.root_pane.pane_id,
+        })
+    }
+
+    fn start_agent(
+        &self,
+        lane: &CreatedLane,
+        ticket_id: &str,
+        prompt: &str,
+    ) -> Result<StatusHint, Error> {
+        let name = format!("t{ticket_id}");
+        self.herdr_unit(&[
+            "agent",
+            "start",
+            &name,
+            "--kind",
+            "claude",
+            "--pane",
+            &lane.handle,
+            "--",
+            "--permission-mode",
+            "bypassPermissions",
+        ])?;
+        self.herdr_unit(&["agent", "prompt", &name, prompt])?;
+        let waited = self.try_herdr::<AgentReply>(&[
+            "agent",
+            "wait",
+            &name,
+            "--until",
+            "working",
+            "--until",
+            "blocked",
+            "--timeout",
+            START_TIMEOUT_MS,
+        ]);
+        match waited? {
+            Ok(reply) => Ok(reply.agent.status()),
+            // An agent slow to pick up its prompt is started all the same; its status just isn't known yet.
+            Err(e) if e.code == "timeout" => Ok(StatusHint::Unknown),
+            Err(e) => Err(Error::new(format!(
+                "`herdr agent wait` failed: {} ({})",
+                e.message, e.code
+            ))),
+        }
+    }
+
+    fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {
+        let repo = repo.to_string_lossy();
+        let worktrees: WorktreeList = self.herdr(&["worktree", "list", "--cwd", &repo])?;
+        let agents: AgentList = self.herdr(&["agent", "list"])?;
+        Ok(worktrees
+            .worktrees
+            .into_iter()
+            .map(|w| {
+                let status = w
+                    .open_workspace_id
+                    .as_deref()
+                    .map_or(StatusHint::Unknown, |ws| agents.status_of(ws));
+                HostCheckout {
+                    path: w.path,
+                    branch: w.branch,
+                    is_main: !w.is_linked_worktree,
+                    workspace: w.open_workspace_id,
+                    status,
+                }
+            })
+            .collect())
+    }
+}
+
+/// `herdr <group> <verb>`, for messages.
+fn command(args: &[&str]) -> String {
+    let words: Vec<_> = args.iter().take(2).copied().collect();
+    format!("herdr {}", words.join(" "))
+}
+
+#[derive(Deserialize)]
+struct Reply<T> {
+    result: T,
+}
+
+#[derive(Deserialize)]
+struct ErrorReply {
+    error: ErrorBody,
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    code: String,
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct WorktreeCreated {
+    worktree: Worktree,
+    workspace: Workspace,
+    root_pane: Pane,
+}
+
+#[derive(Deserialize)]
+struct WorktreeList {
+    worktrees: Vec<Worktree>,
+}
+
+#[derive(Deserialize)]
+struct Worktree {
+    path: PathBuf,
+    branch: Option<String>,
+    is_linked_worktree: bool,
+    open_workspace_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Workspace {
+    workspace_id: String,
+}
+
+#[derive(Deserialize)]
+struct Pane {
+    pane_id: String,
+}
+
+#[derive(Deserialize)]
+struct AgentReply {
+    agent: Agent,
+}
+
+#[derive(Deserialize)]
+struct AgentList {
+    agents: Vec<Agent>,
+}
+
+impl AgentList {
+    /// The status of the agents in workspace `ws`, picking the one most in need of attention.
+    fn status_of(&self, ws: &str) -> StatusHint {
+        let statuses: Vec<_> = self
+            .agents
+            .iter()
+            .filter(|a| a.workspace_id == ws)
+            .map(Agent::status)
+            .collect();
+        [StatusHint::Blocked, StatusHint::Working, StatusHint::Idle]
+            .into_iter()
+            .find(|s| statuses.contains(s))
+            .unwrap_or(StatusHint::Unknown)
+    }
+}
+
+#[derive(Deserialize)]
+struct Agent {
+    agent_status: String,
+    workspace_id: String,
+}
+
+impl Agent {
+    fn status(&self) -> StatusHint {
+        match self.agent_status.as_str() {
+            "working" => StatusHint::Working,
+            "blocked" => StatusHint::Blocked,
+            "idle" | "done" => StatusHint::Idle,
+            _ => StatusHint::Unknown,
+        }
+    }
+}

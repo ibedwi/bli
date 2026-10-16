@@ -4,13 +4,46 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer};
 
+use crate::branch::BranchPattern;
 use crate::error::Error;
 
 pub const FILE_NAME: &str = "bli.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub lane: LaneConfig,
     pub tracker: TrackerConfig,
+}
+
+/// How lanes are made: which host runs them, what they branch from, and what the agent is told.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LaneConfig {
+    pub host: HostKind,
+    /// The default base branch, on the `origin` remote.
+    pub base: String,
+    pub branch: BranchPattern,
+    /// The agent's first prompt; `{ticket_url}` is replaced with the ticket's URL.
+    pub prompt: String,
+}
+
+impl Default for LaneConfig {
+    fn default() -> Self {
+        LaneConfig {
+            host: HostKind::Herdr,
+            base: "main".into(),
+            branch: BranchPattern::default(),
+            prompt: "/implement {ticket_url}".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostKind {
+    Herdr,
+    Superset,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

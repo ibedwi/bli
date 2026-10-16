@@ -15,6 +15,8 @@
           version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
+          # The command-layer tests run real git against a temporary repo.
+          nativeCheckInputs = [ pkgs.git ];
         };
       in
       {
