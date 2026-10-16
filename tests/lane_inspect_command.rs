@@ -34,6 +34,7 @@ fn lane_inspect_reports_a_clean_lane() {
             "status": "idle",
             "modified": [],
             "untracked": [],
+            "ignored": [],
             "unpushed": [],
             "upstream": null,
             "pr": null,
@@ -241,10 +242,33 @@ fn lane_inspect_prints_a_readable_report() {
             "4  {BRANCH}  (base main, idle)\n    {}\n\
              modified:  none\n\
              untracked: new.txt\n\
+             ignored:   none\n\
              unpushed:  1 commit\n    {local} Local work\n\
              upstream:  none\n\
              PR:        #21 merged  https://code.test/pull/21\n",
             path.display()
         )
     );
+}
+
+#[test]
+fn lane_inspect_reports_ignored_files_which_go_with_the_checkout() {
+    let repo = Repo::new(GITHUB);
+    let path = repo.add_worktree(BRANCH);
+    std::fs::write(path.join(".gitignore"), ".env\ntarget/\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "-q", "-m", "Ignore"]);
+    std::fs::write(path.join(".env"), "TOKEN=x").unwrap();
+    std::fs::create_dir_all(path.join("target/debug")).unwrap();
+    std::fs::write(path.join("target/debug/bli"), "").unwrap();
+    let fakes = Fakes {
+        host: FakeHost::default().with_checkout_at(&path, BRANCH, StatusHint::Idle),
+        ..Default::default()
+    };
+
+    let out = bli(&["lane", "inspect", "4", "--json"], repo.path(), &fakes);
+
+    let report = json(&out);
+    assert_eq!(report["ignored"], json!([".env", "target/"]));
+    assert_eq!(report["untracked"], json!([]));
 }

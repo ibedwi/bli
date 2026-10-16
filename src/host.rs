@@ -64,6 +64,9 @@ pub trait LaneHost {
     /// Whether `bli` is running inside this host, so host commands have something to act on.
     fn is_inside(&self) -> bool;
 
+    /// The workspace `bli` is running in, when the host says.
+    fn current_workspace(&self) -> Option<&str>;
+
     /// Creates a lane for the repo whose main checkout is `repo`.
     fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error>;
 
@@ -102,6 +105,10 @@ impl<T: LaneHost + ?Sized> LaneHost for &T {
 
     fn is_inside(&self) -> bool {
         (**self).is_inside()
+    }
+
+    fn current_workspace(&self) -> Option<&str> {
+        (**self).current_workspace()
     }
 
     fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error> {

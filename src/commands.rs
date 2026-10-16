@@ -532,6 +532,7 @@ impl Inspection {
         };
         out.push_str(&format!("modified:  {}\n", list(&self.changes.modified)));
         out.push_str(&format!("untracked: {}\n", list(&self.changes.untracked)));
+        out.push_str(&format!("ignored:   {}\n", list(&self.changes.ignored)));
         if self.unpushed.is_empty() {
             out.push_str("unpushed:  none\n");
         } else {
@@ -572,15 +573,19 @@ pub fn lane_rm(
     cwd: &Path,
     request: &RmRequest,
     json: bool,
-) -> Result<String, Error> {
+) -> Result<Report, Error> {
     require_inside(host)?;
     let lane = find_lane(host, git, config, cwd, request.name)?;
-    if normalize(cwd).starts_with(normalize(&lane.path)) {
+    let own_workspace =
+        lane.workspace.is_some() && lane.workspace.as_deref() == host.current_workspace();
+    if own_workspace || normalize(cwd).starts_with(normalize(&lane.path)) {
         return Err(Error::new(format!(
             "lane {} is the one bli is running from",
             lane.ticket
         ))
-        .with_hint("run `bli lane rm` from the main checkout or another lane"));
+        .with_hint(
+            "run `bli lane rm` from another workspace of the lane host, outside this lane's checkout",
+        ));
     }
     let changes = git.changes(&lane.path)?;
     if !changes.is_empty() && !request.force {
@@ -622,22 +627,33 @@ pub fn lane_rm(
         lane.workspace.as_deref(),
         request.force,
     )?;
-    if request.delete_branch {
+    // The lane is gone from here on, so a failure to delete its branch is reported
+    // alongside what was removed: rerunning `lane rm` can no longer find the lane.
+    let failure = if request.delete_branch {
         // Deleting a branch also deletes its config, the recorded base among it.
-        git.delete_branch(&lane.branch)?;
-    }
+        git.delete_branch(&lane.branch).err().map(|e| {
+            Error::new(format!(
+                "removed lane {}, but could not delete its branch: {e}",
+                lane.ticket
+            ))
+            .with_hint(format!("delete it with `git branch -D {}`", lane.branch))
+        })
+    } else {
+        None
+    };
     let removed = Removed {
+        branch_deleted: request.delete_branch && failure.is_none(),
         ticket: lane.ticket,
         branch: lane.branch,
         path: lane.path,
         workspace: lane.workspace,
         forced: request.force,
-        branch_deleted: request.delete_branch,
     };
     if json {
-        return Ok(format!("{}\n", json!(removed)));
+        let stdout = format!("{}\n", json!(removed));
+        return Ok(Report { stdout, failure });
     }
-    Ok(format!(
+    let stdout = format!(
         "Removed lane {} at {}{}\n",
         removed.ticket,
         removed.path.display(),
@@ -646,7 +662,8 @@ pub fn lane_rm(
         } else {
             format!("; its branch {} is kept", removed.branch)
         }
-    ))
+    );
+    Ok(Report { stdout, failure })
 }
 
 /// What `lane rm` removed.

@@ -262,3 +262,74 @@ fn lane_rm_counts_commits_whose_remote_branch_was_deleted_as_unpushed() {
     assert_refused(&out, &fakes, "Pushed once");
     assert!(branch_exists(&repo, BRANCH));
 }
+
+#[test]
+fn lane_rm_refuses_the_lane_whose_workspace_it_runs_in_from_any_directory() {
+    let (repo, _path, fakes) = lane();
+    let fakes = Fakes {
+        host: fakes.host.running_in("w11"),
+        ..Default::default()
+    };
+
+    let out = bli(&["lane", "rm", "4", "--force"], repo.path(), &fakes);
+
+    assert_refused(&out, &fakes, "running from");
+}
+
+#[test]
+fn lane_rm_deletes_the_branch_when_the_host_leaves_a_stale_worktree_record() {
+    let (repo, path, fakes) = lane();
+    let fakes = Fakes {
+        host: fakes.host.leaving_worktree_records(),
+        ..Default::default()
+    };
+
+    let out = bli(
+        &["lane", "rm", "4", "--delete-branch", "--json"],
+        repo.path(),
+        &fakes,
+    );
+
+    assert_eq!(json(&out)["branch_deleted"], true);
+    assert!(!path.exists());
+    assert!(!branch_exists(&repo, BRANCH));
+}
+
+#[test]
+fn lane_rm_says_the_lane_is_gone_when_only_deleting_its_branch_fails() {
+    let (repo, path, fakes) = lane();
+    // A held ref lock makes `git branch -D` fail.
+    let lock = repo.root.join(format!(".git/refs/heads/{BRANCH}.lock"));
+    std::fs::write(&lock, "").unwrap();
+
+    let out = bli(
+        &["lane", "rm", "4", "--delete-branch", "--json"],
+        repo.path(),
+        &fakes,
+    );
+
+    assert_eq!(out.code, 1);
+    let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(report["branch_deleted"], false);
+    assert!(!path.exists());
+    assert!(out.stderr.contains("could not delete"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains(&format!("git branch -D {BRANCH}")),
+        "{}",
+        out.stderr
+    );
+}
+
+#[test]
+fn lane_rm_removes_a_lane_whose_only_changes_are_ignored_files() {
+    let (repo, path, fakes) = lane();
+    std::fs::write(path.join(".gitignore"), ".env\n").unwrap();
+    git(&path, &["add", ".gitignore"]);
+    git(&path, &["commit", "-q", "-m", "Ignore"]);
+    std::fs::write(path.join(".env"), "TOKEN=x").unwrap();
+
+    let out = bli(&["lane", "rm", "4", "--json"], repo.path(), &fakes);
+
+    assert_eq!(json(&out)["forced"], false);
+    assert!(!path.exists());
+}

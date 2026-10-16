@@ -536,3 +536,13 @@ fn remove_lane_reports_herdrs_refusal() {
         "{err}"
     );
 }
+
+#[test]
+fn current_workspace_is_the_one_herdr_says_this_pane_is_in() {
+    let runner = FakeRunner::default();
+    assert_eq!(
+        herdr(&runner).in_workspace(Some("w4")).current_workspace(),
+        Some("w4")
+    );
+    assert_eq!(herdr(&runner).current_workspace(), None);
+}

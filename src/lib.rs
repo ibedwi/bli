@@ -277,7 +277,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
                 force: *force,
                 delete_branch: *delete_branch,
             };
-            commands::lane_rm(host.as_ref(), &git, &config, cwd, &request, cli.json).map(Into::into)
+            commands::lane_rm(host.as_ref(), &git, &config, cwd, &request, cli.json)
         }
     }
 }

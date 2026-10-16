@@ -21,7 +21,7 @@ bli lane inspect <lane> --json
 Show the developer the report, phrased as what removal would lose:
 
 - `ticket`, `branch`, `path`, and `status`, the host's hint about the agent. A `working` or `blocked` agent is still running in the lane: say so.
-- `modified` and `untracked`: files lost with the checkout.
+- `modified`, `untracked` and `ignored`: files lost with the checkout. `ignored` files go even without force, so call out any that matter, like `.env`.
 - `unpushed`: commits on no remote, lost if the branch is deleted.
 - `upstream`, and `pr` with its `state` and `url`. A `merged` PR means the work has landed.
 
@@ -49,7 +49,7 @@ Name the lane by its `branch` from the report, which is unambiguous:
 bli lane rm <branch> --json      # add --delete-branch and --force only on an explicit yes
 ```
 
-On a refusal, show the developer the stderr; retry only with a new explicit yes to the choice it names.
+On a refusal, show the developer the stderr; retry only with a new explicit yes to the choice it names. An exit 1 with JSON on stdout means the lane was removed but its branch was not deleted: show the stderr, whose hint holds the command that finishes the job.
 
 Report what `bli` removed: the lane's path, and whether its branch was deleted (`branch_deleted`) or kept.
 

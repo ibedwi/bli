@@ -18,6 +18,7 @@ const START_TIMEOUT_MS: &str = "20000";
 pub struct Herdr<R> {
     runner: R,
     inside: bool,
+    workspace: Option<String>,
 }
 
 impl<R: ProcessRunner> Herdr<R> {
@@ -26,7 +27,14 @@ impl<R: ProcessRunner> Herdr<R> {
         Herdr {
             runner,
             inside: herdr_env == Some("1"),
+            workspace: None,
         }
+    }
+
+    /// `ws` is the value of `HERDR_WORKSPACE_ID`, which herdr sets to its pane's workspace.
+    pub fn in_workspace(mut self, ws: Option<&str>) -> Self {
+        self.workspace = ws.map(str::to_string);
+        self
     }
 
     /// Runs `herdr` with `args` and returns the `result` of its JSON reply.
@@ -125,6 +133,10 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
 
     fn is_inside(&self) -> bool {
         self.inside
+    }
+
+    fn current_workspace(&self) -> Option<&str> {
+        self.workspace.as_deref()
     }
 
     fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error> {

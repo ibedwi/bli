@@ -300,7 +300,9 @@ fn find_pr_lists_the_head_branchs_prs_in_any_state() {
             "--state",
             "all",
             "--json",
-            "number,url,state",
+            "number,url,state,createdAt",
+            "--limit",
+            "100",
         ]]
     );
     assert_eq!(
@@ -322,8 +324,8 @@ fn find_pr_finds_nothing_for_a_branch_without_a_pr() {
 #[test]
 fn find_pr_prefers_an_open_pr_over_a_closed_one() {
     let runner = FakeRunner::replying(
-        r#"[{"number":14,"state":"CLOSED","url":"https://github.com/o/r/pull/14"},
-            {"number":13,"state":"OPEN","url":"https://github.com/o/r/pull/13"}]"#,
+        r#"[{"createdAt":"2026-10-16T12:00:00Z","number":14,"state":"CLOSED","url":"https://github.com/o/r/pull/14"},
+            {"createdAt":"2026-10-16T09:00:00Z","number":13,"state":"OPEN","url":"https://github.com/o/r/pull/13"}]"#,
     );
     let pr = GitHub::new(&runner).find_pr("ticket/5-x").unwrap().unwrap();
     assert_eq!(pr.number, 13);
@@ -435,4 +437,19 @@ fn checks_warn_with_a_login_hint_when_gh_credentials_fail() {
         checks[1].hint.as_deref().unwrap().contains("gh auth login"),
         "{checks:?}"
     );
+}
+
+#[test]
+fn find_pr_without_an_open_pr_picks_the_newest_whatever_order_gh_lists_them_in() {
+    let reply = r#"[
+        {"createdAt":"2026-10-16T09:48:25Z","number":12,"state":"CLOSED","url":"https://github.com/ibedwi/bli/pull/12"},
+        {"createdAt":"2026-10-17T08:00:00Z","number":15,"state":"MERGED","url":"https://github.com/ibedwi/bli/pull/15"},
+        {"createdAt":"2026-10-15T10:00:00Z","number":9,"state":"CLOSED","url":"https://github.com/ibedwi/bli/pull/9"}
+    ]"#;
+    let runner = FakeRunner::replying(reply);
+
+    let pr = GitHub::new(&runner).find_pr("b").unwrap().unwrap();
+
+    assert_eq!(pr.number, 15);
+    assert_eq!(pr.state, PrState::Merged);
 }

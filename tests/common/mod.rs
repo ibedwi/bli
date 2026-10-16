@@ -168,6 +168,7 @@ impl CodeHost for FakeCodeHost {
 /// A lane host holding its checkouts in memory. Lanes it creates show up in its list.
 pub struct FakeHost {
     inside: bool,
+    workspace: Option<String>,
     checkouts: RefCell<Vec<HostCheckout>>,
     created: RefCell<Vec<(PathBuf, NewLane)>>,
     started: RefCell<Vec<(String, String)>>,
@@ -178,12 +179,14 @@ pub struct FakeHost {
     agents_fail: bool,
     agent_output: HashMap<String, String>,
     checks: Vec<Check>,
+    leaves_records: bool,
 }
 
 impl Default for FakeHost {
     fn default() -> Self {
         FakeHost {
             inside: true,
+            workspace: None,
             checkouts: RefCell::new(Vec::new()),
             created: RefCell::new(Vec::new()),
             started: RefCell::new(Vec::new()),
@@ -194,6 +197,7 @@ impl Default for FakeHost {
             agents_fail: false,
             agent_output: HashMap::new(),
             checks: Vec::new(),
+            leaves_records: false,
         }
     }
 }
@@ -267,6 +271,12 @@ impl FakeHost {
         self
     }
 
+    /// Makes `bli` run in workspace `ws`, as from a pane of that workspace.
+    pub fn running_in(mut self, ws: &str) -> Self {
+        self.workspace = Some(ws.to_string());
+        self
+    }
+
     pub fn starting_agents_as(mut self, status: StatusHint) -> Self {
         self.start_status = status;
         self
@@ -275,6 +285,12 @@ impl FakeHost {
     /// Makes creating a lane on `branch` fail.
     pub fn failing_to_create(mut self, branch: &str) -> Self {
         self.failing_branches.push(branch.to_string());
+        self
+    }
+
+    /// Makes removing a lane delete its directory but leave git's worktree record, as a careless host might.
+    pub fn leaving_worktree_records(mut self) -> Self {
+        self.leaves_records = true;
         self
     }
 
@@ -332,6 +348,10 @@ impl LaneHost for FakeHost {
 
     fn is_inside(&self) -> bool {
         self.inside
+    }
+
+    fn current_workspace(&self) -> Option<&str> {
+        self.workspace.as_deref()
     }
 
     fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error> {
@@ -403,7 +423,9 @@ impl LaneHost for FakeHost {
         });
         self.checkouts.borrow_mut().retain(|c| c.path != path);
         // A real checkout goes the way a real host removes it, refusing changes without force.
-        if path.exists() {
+        if path.exists() && self.leaves_records {
+            std::fs::remove_dir_all(path).unwrap();
+        } else if path.exists() {
             let path = path.to_str().unwrap();
             let mut args = vec!["worktree", "remove", path];
             if force {

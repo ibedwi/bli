@@ -82,7 +82,7 @@ impl Git {
         Ok(out.success.then(|| out.stdout.trim().to_string()))
     }
 
-    /// The files changed in the checkout at `path`, split into tracked and untracked.
+    /// The files changed in the checkout at `path`, split into tracked, untracked and ignored.
     pub fn changes(&self, path: &Path) -> Result<Changes, Error> {
         let out = run(
             path,
@@ -102,6 +102,23 @@ impl Git {
                 }
             }
         }
+        // Ignored files are listed apart, with whole ignored directories collapsed, so a
+        // build directory is one entry rather than thousands.
+        let ignored = run(
+            path,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--ignored=matching",
+                "--untracked-files=normal",
+            ],
+        )?;
+        changes.ignored = ignored
+            .split('\0')
+            .filter_map(|e| e.strip_prefix("!! "))
+            .map(str::to_string)
+            .collect();
         Ok(changes)
     }
 
@@ -135,8 +152,10 @@ impl Git {
         Ok(out.success.then(|| out.stdout.trim().to_string()))
     }
 
-    /// Deletes local branch `branch`, whether or not it is merged.
+    /// Deletes local branch `branch`, whether or not it is merged. Records of checkouts
+    /// whose directory is gone are pruned first, since git won't delete a branch they hold.
     pub fn delete_branch(&self, branch: &str) -> Result<(), Error> {
+        self.git(&["worktree", "prune"])?;
         self.git(&["branch", "--quiet", "-D", branch]).map(drop)
     }
 
@@ -150,9 +169,12 @@ impl Git {
 pub struct Changes {
     pub modified: Vec<String>,
     pub untracked: Vec<String>,
+    /// Files git ignores, such as `.env` or build output; an ignored directory is one entry.
+    pub ignored: Vec<String>,
 }
 
 impl Changes {
+    /// Whether nothing git tracks, or would track, has changed. Ignored files don't count.
     pub fn is_empty(&self) -> bool {
         self.modified.is_empty() && self.untracked.is_empty()
     }
