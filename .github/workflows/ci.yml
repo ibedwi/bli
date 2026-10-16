@@ -15,3 +15,5 @@ jobs:
         run: nix build -L
       - name: cargo test
         run: nix develop -c cargo test
+      - name: cargo fmt
+        run: nix develop -c cargo fmt --check
