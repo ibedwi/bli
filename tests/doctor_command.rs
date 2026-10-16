@@ -1,4 +1,4 @@
-//! Seam 1: the command layer, for `bli doctor`. Fake providers and real git.
+//! Seam 1: the command layer, for `bli doctor`. Fake providers, a real repo, and a fake git for the git check.
 
 mod common;
 
@@ -71,19 +71,11 @@ fn doctor_prints_each_check_as_pass_or_warn_with_its_hint() {
     let out = bli(&["doctor"], repo.path(), &fakes);
 
     assert_eq!(out.code, 1);
-    let lines: Vec<_> = out.stdout.lines().collect();
-    assert!(
-        lines[0].starts_with("pass  git  git version"),
-        "{}",
-        out.stdout
-    );
     assert_eq!(
-        lines[1..],
-        [
-            "pass  tracker auth  logged in",
-            "warn  host  not running",
-            "      hint: start it",
-        ]
+        out.stdout,
+        "pass  git  git version 2.51.0\n\
+         pass  tracker auth  logged in\n\
+         warn  host  not running\n      hint: start it\n"
     );
 }
 
@@ -104,4 +96,21 @@ fn doctor_warns_on_a_provider_bli_cannot_build_and_checks_the_rest() {
     assert_eq!(checks["checks"][1]["status"], "warn");
     assert_eq!(checks["checks"][1]["detail"], "unsupported issue tracker");
     assert_eq!(checks["checks"][2]["name"], "host");
+}
+
+#[test]
+fn doctor_warns_with_an_install_hint_when_git_is_missing() {
+    let repo = Repo::new(GITHUB);
+    let fakes = Fakes {
+        git: FakeGit::missing(),
+        ..Default::default()
+    };
+
+    let out = bli(&["doctor"], repo.path(), &fakes);
+
+    assert_eq!(out.code, 1);
+    assert_eq!(
+        out.stdout,
+        "warn  git  could not run `git`: it is not installed\n      hint: install git (https://git-scm.com)\n"
+    );
 }

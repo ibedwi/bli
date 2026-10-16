@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::git::Git;
 use crate::host::LaneHost;
-use crate::process::SystemRunner;
+use crate::process::ProcessRunner;
 use crate::tracker::IssueTracker;
 
 /// Builds the providers a repo's config asks for. The real one runs real tools; tests pass fakes.
@@ -30,6 +30,8 @@ pub trait Providers {
     fn issue_tracker(&self, config: &Config) -> Result<Box<dyn IssueTracker + '_>, Error>;
     fn lane_host(&self, config: &Config) -> Result<Box<dyn LaneHost + '_>, Error>;
     fn code_host(&self, config: &Config) -> Result<Box<dyn CodeHost + '_>, Error>;
+    /// Runs `git` for `bli doctor`'s git check.
+    fn git_runner(&self) -> &dyn ProcessRunner;
 }
 
 /// What a command run produced, for `main` to print and exit with.
@@ -160,7 +162,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
     let config = Config::load(cwd)?;
     // Doctor runs before opening the repo, so a missing git is a warning rather than an error.
     if let Command::Doctor = cli.command {
-        let mut checks = vec![git::check(&SystemRunner)];
+        let mut checks = vec![git::check(providers.git_runner())];
         match providers.issue_tracker(&config) {
             Ok(tracker) => checks.extend(tracker.checks()),
             Err(e) => checks.push(Check::warn("issue tracker", &e)),

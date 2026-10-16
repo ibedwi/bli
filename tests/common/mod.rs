@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -13,6 +14,7 @@ use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::config::Config;
 use bli::error::Error;
 use bli::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
+use bli::process::{Output, ProcessRunner};
 use bli::tracker::{IssueTracker, Ticket, TicketDetails};
 use bli::{Outcome, Providers};
 use tempfile::TempDir;
@@ -338,12 +340,44 @@ impl LaneHost for FakeHost {
     }
 }
 
+/// Answers `git --version` as an installed git would, or as if git were missing.
+pub struct FakeGit {
+    installed: bool,
+}
+
+impl Default for FakeGit {
+    fn default() -> Self {
+        FakeGit { installed: true }
+    }
+}
+
+impl FakeGit {
+    pub fn missing() -> Self {
+        FakeGit { installed: false }
+    }
+}
+
+impl ProcessRunner for FakeGit {
+    fn run(&self, program: &str, args: &[&str]) -> io::Result<Output> {
+        assert_eq!((program, args), ("git", &["--version"][..]));
+        if !self.installed {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "no git"));
+        }
+        Ok(Output {
+            success: true,
+            stdout: "git version 2.51.0\n".into(),
+            stderr: String::new(),
+        })
+    }
+}
+
 /// The providers a test hands to `bli::run`.
 #[derive(Default)]
 pub struct Fakes {
     pub tracker: FakeTracker,
     pub host: FakeHost,
     pub code: FakeCodeHost,
+    pub git: FakeGit,
     /// Makes building the issue tracker fail, as for a tracker `bli` does not support yet.
     pub tracker_unsupported: bool,
 }
@@ -362,6 +396,10 @@ impl Providers for Fakes {
 
     fn code_host(&self, _config: &Config) -> Result<Box<dyn CodeHost + '_>, Error> {
         Ok(Box::new(&self.code))
+    }
+
+    fn git_runner(&self) -> &dyn ProcessRunner {
+        &self.git
     }
 }
 

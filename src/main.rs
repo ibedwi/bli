@@ -7,7 +7,7 @@ use bli::error::Error;
 use bli::github::GitHub;
 use bli::herdr::Herdr;
 use bli::host::LaneHost;
-use bli::process::SystemRunner;
+use bli::process::{ProcessRunner, SystemRunner};
 use bli::tracker::IssueTracker;
 use bli::Providers;
 
@@ -39,6 +39,10 @@ impl Providers for System {
     /// GitHub is the only code host.
     fn code_host(&self, _config: &Config) -> Result<Box<dyn CodeHost + '_>, Error> {
         Ok(Box::new(GitHub::new(SystemRunner)))
+    }
+
+    fn git_runner(&self) -> &dyn ProcessRunner {
+        &SystemRunner
     }
 }
 
