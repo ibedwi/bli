@@ -29,7 +29,11 @@ impl Providers for System {
         match config.lane.host {
             HostKind::Herdr => {
                 let herdr_env = std::env::var("HERDR_ENV").ok();
-                Ok(Box::new(Herdr::new(SystemRunner, herdr_env.as_deref())))
+                let workspace = std::env::var("HERDR_WORKSPACE_ID").ok();
+                Ok(Box::new(
+                    Herdr::new(SystemRunner, herdr_env.as_deref())
+                        .in_workspace(workspace.as_deref()),
+                ))
             }
             HostKind::Superset => Err(Error::new("the Superset lane host is not supported yet")
                 .with_hint("set `host = \"herdr\"` under [lane] in bli.toml")),

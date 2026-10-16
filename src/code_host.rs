@@ -46,7 +46,7 @@ pub trait CodeHost {
     /// Pushes local branch `branch` of the repo whose main checkout is `repo`, tracking it.
     fn push(&self, repo: &Path, branch: &str) -> Result<(), Error>;
 
-    /// The pull request from branch `head`, in any state, preferring an open one.
+    /// The pull request from branch `head`, in any state: the open one, else the newest.
     fn find_pr(&self, head: &str) -> Result<Option<PullRequest>, Error>;
 
     fn open_pr(&self, pr: &NewPullRequest) -> Result<PullRequest, Error>;

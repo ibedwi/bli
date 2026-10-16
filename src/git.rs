@@ -3,6 +3,8 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::check::Check;
 use crate::error::Error;
 use crate::process::{Output, ProcessRunner, SystemRunner};
@@ -45,8 +47,10 @@ impl Git {
         &self.main
     }
 
+    /// Fetches the remote, pruning tracking refs of branches it no longer has, so they
+    /// don't count commits as pushed after the remote branch is gone.
     pub fn fetch(&self) -> Result<(), Error> {
-        self.git(&["fetch", "--quiet", REMOTE]).map(drop)
+        self.git(&["fetch", "--quiet", "--prune", REMOTE]).map(drop)
     }
 
     /// Whether `branch` exists on the remote, as of the last fetch.
@@ -78,9 +82,108 @@ impl Git {
         Ok(out.success.then(|| out.stdout.trim().to_string()))
     }
 
+    /// The files changed in the checkout at `path`, split into tracked, untracked and ignored.
+    pub fn changes(&self, path: &Path) -> Result<Changes, Error> {
+        let out = run(
+            path,
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        )?;
+        let mut changes = Changes::default();
+        let mut entries = out.split('\0').filter(|e| !e.is_empty());
+        while let Some(entry) = entries.next() {
+            let (code, file) = entry.split_at(3.min(entry.len()));
+            if code.starts_with("??") {
+                changes.untracked.push(file.to_string());
+            } else {
+                changes.modified.push(file.to_string());
+                // A rename or copy is followed by its original path.
+                if code.starts_with('R') || code.starts_with('C') {
+                    entries.next();
+                }
+            }
+        }
+        // Ignored files are listed apart, with whole ignored directories collapsed, so a
+        // build directory is one entry rather than thousands.
+        let ignored = run(
+            path,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--ignored=matching",
+                "--untracked-files=normal",
+            ],
+        )?;
+        changes.ignored = ignored
+            .split('\0')
+            .filter_map(|e| e.strip_prefix("!! "))
+            .map(str::to_string)
+            .collect();
+        Ok(changes)
+    }
+
+    /// The commits on `branch` that no remote-tracking branch has, newest first.
+    pub fn unpushed(&self, branch: &str) -> Result<Vec<Commit>, Error> {
+        let reference = format!("refs/heads/{branch}");
+        let out = self.git(&["log", "--format=%h%x09%s", &reference, "--not", "--remotes"])?;
+        Ok(out
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(sha, subject)| Commit {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+            })
+            .collect())
+    }
+
+    /// The upstream `branch` tracks, such as `origin/ticket/4-x`, if any.
+    pub fn upstream(&self, branch: &str) -> Result<Option<String>, Error> {
+        let reference = format!("{branch}@{{upstream}}");
+        let out = output(
+            &self.main,
+            &[
+                "rev-parse",
+                "--abbrev-ref",
+                "--symbolic-full-name",
+                &reference,
+            ],
+        )?;
+        // `rev-parse` fails when the branch has no upstream.
+        Ok(out.success.then(|| out.stdout.trim().to_string()))
+    }
+
+    /// Deletes local branch `branch`, whether or not it is merged. Records of checkouts
+    /// whose directory is gone are pruned first, since git won't delete a branch they hold.
+    pub fn delete_branch(&self, branch: &str) -> Result<(), Error> {
+        self.git(&["worktree", "prune"])?;
+        self.git(&["branch", "--quiet", "-D", branch]).map(drop)
+    }
+
     fn git(&self, args: &[&str]) -> Result<String, Error> {
         run(&self.main, args)
     }
+}
+
+/// Files changed in a checkout, as paths relative to its root.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Changes {
+    pub modified: Vec<String>,
+    pub untracked: Vec<String>,
+    /// Files git ignores, such as `.env` or build output; an ignored directory is one entry.
+    pub ignored: Vec<String>,
+}
+
+impl Changes {
+    /// Whether nothing git tracks, or would track, has changed. Ignored files don't count.
+    pub fn is_empty(&self) -> bool {
+        self.modified.is_empty() && self.untracked.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Commit {
+    pub sha: String,
+    pub subject: String,
 }
 
 fn base_key(branch: &str) -> String {

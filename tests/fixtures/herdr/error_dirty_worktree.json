@@ -1,0 +1,1 @@
+{"error":{"code":"dirty_worktree_requires_force","message":"fatal: '/home/ibedwi/.herdr/worktrees/bli/scratch-bli-rm-fixture' contains modified or untracked files, use --force to delete it"},"id":"cli:worktree:remove"}

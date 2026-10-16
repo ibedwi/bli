@@ -168,30 +168,36 @@ impl CodeHost for FakeCodeHost {
 /// A lane host holding its checkouts in memory. Lanes it creates show up in its list.
 pub struct FakeHost {
     inside: bool,
+    workspace: Option<String>,
     checkouts: RefCell<Vec<HostCheckout>>,
     created: RefCell<Vec<(PathBuf, NewLane)>>,
     started: RefCell<Vec<(String, String)>>,
     listed_from: RefCell<Vec<PathBuf>>,
+    removed: RefCell<Vec<Removal>>,
     start_status: StatusHint,
     failing_branches: Vec<String>,
     agents_fail: bool,
     agent_output: HashMap<String, String>,
     checks: Vec<Check>,
+    leaves_records: bool,
 }
 
 impl Default for FakeHost {
     fn default() -> Self {
         FakeHost {
             inside: true,
+            workspace: None,
             checkouts: RefCell::new(Vec::new()),
             created: RefCell::new(Vec::new()),
             started: RefCell::new(Vec::new()),
             listed_from: RefCell::new(Vec::new()),
+            removed: RefCell::new(Vec::new()),
             start_status: StatusHint::Working,
             failing_branches: Vec::new(),
             agents_fail: false,
             agent_output: HashMap::new(),
             checks: Vec::new(),
+            leaves_records: false,
         }
     }
 }
@@ -217,6 +223,43 @@ impl FakeHost {
         self
     }
 
+    /// Adds a linked checkout on `branch` at a real `path`, such as one from [`Repo::add_worktree`].
+    pub fn with_checkout_at(self, path: &Path, branch: &str, status: StatusHint) -> Self {
+        let n = self.checkouts.borrow().len();
+        self.checkouts.borrow_mut().push(HostCheckout {
+            path: path.to_path_buf(),
+            branch: Some(branch.to_string()),
+            is_main: false,
+            workspace: Some(format!("w{}", n + 10)),
+            status,
+        });
+        self
+    }
+
+    /// Adds a linked checkout on `branch` with no open workspace.
+    pub fn with_closed_checkout(self, branch: &str) -> Self {
+        self.checkouts.borrow_mut().push(HostCheckout {
+            path: PathBuf::from(format!("/lanes/{}", branch.replace('/', "-"))),
+            branch: Some(branch.to_string()),
+            is_main: false,
+            workspace: None,
+            status: StatusHint::Unknown,
+        });
+        self
+    }
+
+    /// Adds the main checkout at a real `path`.
+    pub fn with_main_checkout_at(self, path: &Path, branch: &str) -> Self {
+        self.checkouts.borrow_mut().push(HostCheckout {
+            path: path.to_path_buf(),
+            branch: Some(branch.to_string()),
+            is_main: true,
+            workspace: Some("w1".into()),
+            status: StatusHint::Unknown,
+        });
+        self
+    }
+
     pub fn with_main_checkout(self, branch: &str) -> Self {
         self.checkouts.borrow_mut().push(HostCheckout {
             path: PathBuf::from("/repo"),
@@ -228,6 +271,12 @@ impl FakeHost {
         self
     }
 
+    /// Makes `bli` run in workspace `ws`, as from a pane of that workspace.
+    pub fn running_in(mut self, ws: &str) -> Self {
+        self.workspace = Some(ws.to_string());
+        self
+    }
+
     pub fn starting_agents_as(mut self, status: StatusHint) -> Self {
         self.start_status = status;
         self
@@ -236,6 +285,12 @@ impl FakeHost {
     /// Makes creating a lane on `branch` fail.
     pub fn failing_to_create(mut self, branch: &str) -> Self {
         self.failing_branches.push(branch.to_string());
+        self
+    }
+
+    /// Makes removing a lane delete its directory but leave git's worktree record, as a careless host might.
+    pub fn leaving_worktree_records(mut self) -> Self {
+        self.leaves_records = true;
         self
     }
 
@@ -270,6 +325,20 @@ impl FakeHost {
     pub fn listed_from(&self) -> Vec<PathBuf> {
         self.listed_from.borrow().clone()
     }
+
+    /// Every lane removed, in order.
+    pub fn removed(&self) -> Vec<Removal> {
+        self.removed.borrow().clone()
+    }
+}
+
+/// One `remove_lane` call the fake host received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removal {
+    pub repo: PathBuf,
+    pub path: PathBuf,
+    pub workspace: Option<String>,
+    pub force: bool,
 }
 
 impl LaneHost for FakeHost {
@@ -279,6 +348,10 @@ impl LaneHost for FakeHost {
 
     fn is_inside(&self) -> bool {
         self.inside
+    }
+
+    fn current_workspace(&self) -> Option<&str> {
+        self.workspace.as_deref()
     }
 
     fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error> {
@@ -333,6 +406,44 @@ impl LaneHost for FakeHost {
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {
         self.listed_from.borrow_mut().push(repo.to_path_buf());
         Ok(self.checkouts.borrow().clone())
+    }
+
+    fn remove_lane(
+        &self,
+        repo: &Path,
+        path: &Path,
+        workspace: Option<&str>,
+        force: bool,
+    ) -> Result<(), Error> {
+        self.removed.borrow_mut().push(Removal {
+            repo: repo.to_path_buf(),
+            path: path.to_path_buf(),
+            workspace: workspace.map(str::to_string),
+            force,
+        });
+        self.checkouts.borrow_mut().retain(|c| c.path != path);
+        // A real checkout goes the way a real host removes it, refusing changes without force.
+        if path.exists() && self.leaves_records {
+            std::fs::remove_dir_all(path).unwrap();
+        } else if path.exists() {
+            let path = path.to_str().unwrap();
+            let mut args = vec!["worktree", "remove", path];
+            if force {
+                args.push("--force");
+            }
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(&args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            if !out.status.success() {
+                return Err(Error::new(String::from_utf8_lossy(&out.stderr).trim()));
+            }
+        }
+        Ok(())
     }
 
     fn checks(&self) -> Vec<Check> {

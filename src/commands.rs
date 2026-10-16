@@ -10,8 +10,8 @@ use crate::check::Check;
 use crate::code_host::{CodeHost, NewPullRequest, PullRequest};
 use crate::config::Config;
 use crate::error::Error;
-use crate::git::{Git, REMOTE};
-use crate::host::{LaneHost, NewLane, StatusHint};
+use crate::git::{Changes, Commit, Git, REMOTE};
+use crate::host::{HostCheckout, LaneHost, NewLane, StatusHint};
 use crate::tracker::IssueTracker;
 
 pub fn frontier(
@@ -89,14 +89,7 @@ pub fn lane_start(
                 .with_hint("a slug is lowercase kebab-case, e.g. `fan-out-on-herdr`"));
         }
     }
-    if !host.is_inside() {
-        let name = host.name();
-        return Err(
-            Error::new(format!("not inside {name}, the configured lane host")).with_hint(format!(
-                "run this from a {name} pane, or change `host` under [lane] in bli.toml"
-            )),
-        );
-    }
+    require_inside(host)?;
     let base = request.base.unwrap_or(&config.lane.base);
     git.fetch()?;
     if !git.has_remote_branch(base)? {
@@ -173,6 +166,19 @@ pub fn lane_start(
         stdout: out,
         failure,
     })
+}
+
+/// Fails unless `bli` runs inside `host`, so host commands have something to act on.
+fn require_inside(host: &dyn LaneHost) -> Result<(), Error> {
+    if host.is_inside() {
+        return Ok(());
+    }
+    let name = host.name();
+    Err(
+        Error::new(format!("not inside {name}, the configured lane host")).with_hint(format!(
+            "run this from a {name} pane, or change `host` under [lane] in bli.toml"
+        )),
+    )
 }
 
 /// Starts the lane for `report`'s ticket, or says why it was skipped, filling in
@@ -469,6 +475,208 @@ impl ShipOutcome {
     }
 }
 
+pub fn lane_inspect(
+    host: &dyn LaneHost,
+    code: &dyn CodeHost,
+    git: &Git,
+    config: &Config,
+    cwd: &Path,
+    name: &str,
+    json: bool,
+) -> Result<String, Error> {
+    let lane = find_lane(host, git, config, cwd, name)?;
+    let inspection = inspect(code, git, lane)?;
+    if json {
+        return Ok(format!("{}\n", json!(inspection)));
+    }
+    Ok(inspection.render())
+}
+
+/// What removing a lane would lose, and where its work stands.
+#[derive(Debug, Serialize)]
+struct Inspection {
+    #[serde(flatten)]
+    lane: Lane,
+    #[serde(flatten)]
+    changes: Changes,
+    unpushed: Vec<Commit>,
+    upstream: Option<String>,
+    pr: Option<PullRequest>,
+}
+
+fn inspect(code: &dyn CodeHost, git: &Git, lane: Lane) -> Result<Inspection, Error> {
+    git.fetch()?;
+    Ok(Inspection {
+        changes: git.changes(&lane.path)?,
+        unpushed: git.unpushed(&lane.branch)?,
+        upstream: git.upstream(&lane.branch)?,
+        pr: code.find_pr(&lane.branch)?,
+        lane,
+    })
+}
+
+impl Inspection {
+    fn render(&self) -> String {
+        let l = &self.lane;
+        let mut out = format!(
+            "{}  {}  (base {}, {})\n    {}\n",
+            l.ticket,
+            l.branch,
+            l.base,
+            l.status.as_str(),
+            l.path.display()
+        );
+        let list = |files: &[String]| match files {
+            [] => "none".to_string(),
+            files => files.join(", "),
+        };
+        out.push_str(&format!("modified:  {}\n", list(&self.changes.modified)));
+        out.push_str(&format!("untracked: {}\n", list(&self.changes.untracked)));
+        out.push_str(&format!("ignored:   {}\n", list(&self.changes.ignored)));
+        if self.unpushed.is_empty() {
+            out.push_str("unpushed:  none\n");
+        } else {
+            let n = self.unpushed.len();
+            let plural = if n == 1 { "" } else { "s" };
+            out.push_str(&format!("unpushed:  {n} commit{plural}\n"));
+            for c in &self.unpushed {
+                out.push_str(&format!("    {} {}\n", c.sha, c.subject));
+            }
+        }
+        out.push_str(&format!(
+            "upstream:  {}\n",
+            self.upstream.as_deref().unwrap_or("none")
+        ));
+        match &self.pr {
+            Some(pr) => out.push_str(&format!(
+                "PR:        #{} {}  {}\n",
+                pr.number,
+                pr.state.as_str(),
+                pr.url
+            )),
+            None => out.push_str("PR:        none\n"),
+        }
+        out
+    }
+}
+
+pub struct RmRequest<'a> {
+    pub name: &'a str,
+    pub force: bool,
+    pub delete_branch: bool,
+}
+
+pub fn lane_rm(
+    host: &dyn LaneHost,
+    git: &Git,
+    config: &Config,
+    cwd: &Path,
+    request: &RmRequest,
+    json: bool,
+) -> Result<Report, Error> {
+    require_inside(host)?;
+    let lane = find_lane(host, git, config, cwd, request.name)?;
+    let own_workspace =
+        lane.workspace.is_some() && lane.workspace.as_deref() == host.current_workspace();
+    if own_workspace || normalize(cwd).starts_with(normalize(&lane.path)) {
+        return Err(Error::new(format!(
+            "lane {} is the one bli is running from",
+            lane.ticket
+        ))
+        .with_hint(
+            "run `bli lane rm` from another workspace of the lane host, outside this lane's checkout",
+        ));
+    }
+    let changes = git.changes(&lane.path)?;
+    if !changes.is_empty() && !request.force {
+        let mut files = changes.modified;
+        files.extend(
+            changes
+                .untracked
+                .into_iter()
+                .map(|f| format!("{f} (untracked)")),
+        );
+        return Err(Error::new(format!(
+            "lane {} has uncommitted or untracked files: {}",
+            lane.ticket,
+            files.join(", ")
+        ))
+        .with_hint("commit or remove them, or pass --force to lose them"));
+    }
+    if request.delete_branch && !request.force {
+        git.fetch()?;
+        let unpushed = git.unpushed(&lane.branch)?;
+        if !unpushed.is_empty() {
+            let commits: Vec<_> = unpushed
+                .iter()
+                .map(|c| format!("{} {}", c.sha, c.subject))
+                .collect();
+            return Err(Error::new(format!(
+                "branch {} has commits on no remote: {}",
+                lane.branch,
+                commits.join("; ")
+            ))
+            .with_hint(
+                "push them, or keep the branch by leaving out --delete-branch, or pass --force to lose them",
+            ));
+        }
+    }
+    host.remove_lane(
+        git.main_checkout(),
+        &lane.path,
+        lane.workspace.as_deref(),
+        request.force,
+    )?;
+    // The lane is gone from here on, so a failure to delete its branch is reported
+    // alongside what was removed: rerunning `lane rm` can no longer find the lane.
+    let failure = if request.delete_branch {
+        // Deleting a branch also deletes its config, the recorded base among it.
+        git.delete_branch(&lane.branch).err().map(|e| {
+            Error::new(format!(
+                "removed lane {}, but could not delete its branch: {e}",
+                lane.ticket
+            ))
+            .with_hint(format!("delete it with `git branch -D {}`", lane.branch))
+        })
+    } else {
+        None
+    };
+    let removed = Removed {
+        branch_deleted: request.delete_branch && failure.is_none(),
+        ticket: lane.ticket,
+        branch: lane.branch,
+        path: lane.path,
+        workspace: lane.workspace,
+        forced: request.force,
+    };
+    if json {
+        let stdout = format!("{}\n", json!(removed));
+        return Ok(Report { stdout, failure });
+    }
+    let stdout = format!(
+        "Removed lane {} at {}{}\n",
+        removed.ticket,
+        removed.path.display(),
+        if removed.branch_deleted {
+            format!(", and its branch {}", removed.branch)
+        } else {
+            format!("; its branch {} is kept", removed.branch)
+        }
+    );
+    Ok(Report { stdout, failure })
+}
+
+/// What `lane rm` removed.
+#[derive(Debug, Serialize)]
+struct Removed {
+    ticket: String,
+    branch: String,
+    path: PathBuf,
+    workspace: Option<String>,
+    forced: bool,
+    branch_deleted: bool,
+}
+
 /// A lane as `bli` sees it: a host checkout whose branch matches the pattern (ADR 0001).
 #[derive(Debug, Serialize)]
 struct Lane {
@@ -493,8 +701,77 @@ fn lane(host: &dyn LaneHost, git: &Git, config: &Config, ticket: &str) -> Result
 
 /// Rediscovers every lane from the host's live list.
 fn lanes(host: &dyn LaneHost, git: &Git, config: &Config) -> Result<Vec<Lane>, Error> {
+    as_lanes(host.list(git.main_checkout())?, git, config)
+}
+
+/// The one lane `name` refers to, by ticket ID, branch, checkout path or host workspace ID.
+fn find_lane(
+    host: &dyn LaneHost,
+    git: &Git,
+    config: &Config,
+    cwd: &Path,
+    name: &str,
+) -> Result<Lane, Error> {
+    let checkouts = host.list(git.main_checkout())?;
+    let path = normalize(&cwd.join(name));
+    let names_main = |c: &HostCheckout| {
+        c.is_main
+            && (c.branch.as_deref() == Some(name)
+                || c.workspace.as_deref() == Some(name)
+                || normalize(&c.path) == path)
+    };
+    if normalize(git.main_checkout()) == path || checkouts.iter().any(names_main) {
+        return Err(Error::new(format!(
+            "`{name}` is the main checkout, which is never a lane"
+        )));
+    }
+    let lanes = as_lanes(checkouts, git, config)?;
+    let ticket = name.strip_prefix('#').unwrap_or(name);
+    let (matches, others): (Vec<_>, Vec<_>) = lanes.into_iter().partition(|l| {
+        l.ticket == ticket
+            || l.branch == name
+            || l.workspace.as_deref() == Some(name)
+            || normalize(&l.path) == path
+    });
+    let mut matches = matches.into_iter();
+    match (matches.next(), matches.next()) {
+        (Some(lane), None) => Ok(lane),
+        (None, _) if others.is_empty() => Err(Error::new(format!(
+            "no lane matches `{name}`: there are no lanes"
+        ))),
+        (None, _) => Err(Error::new(format!("no lane matches `{name}`"))
+            .with_hint(candidates("the lanes are", &others))),
+        (Some(first), Some(second)) => {
+            let all: Vec<_> = [first, second].into_iter().chain(matches).collect();
+            Err(Error::new(format!("`{name}` matches {} lanes", all.len()))
+                .with_hint(candidates("name one by branch or path", &all)))
+        }
+    }
+}
+
+fn candidates(intro: &str, lanes: &[Lane]) -> String {
+    let mut out = format!("{intro}:");
+    for l in lanes {
+        out.push_str(&format!(
+            "\n  {}  {}  {}  {}",
+            l.ticket,
+            l.branch,
+            l.path.display(),
+            l.workspace.as_deref().unwrap_or("-")
+        ));
+    }
+    out
+}
+
+/// `path` resolved through symlinks when it exists, so two spellings of one checkout compare equal.
+fn normalize(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The lanes among a host's checkouts.
+fn as_lanes(checkouts: Vec<HostCheckout>, git: &Git, config: &Config) -> Result<Vec<Lane>, Error> {
     let mut lanes = Vec::new();
-    for checkout in host.list(git.main_checkout())? {
+    for checkout in checkouts {
         if checkout.is_main {
             continue;
         }

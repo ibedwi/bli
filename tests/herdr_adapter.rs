@@ -453,3 +453,96 @@ fn the_permission_mode_check_warns_when_the_herdr_server_is_not_running() {
     assert!(checks[1].detail.contains("not running"), "{checks:?}");
     assert!(checks[1].hint.is_some(), "{checks:?}");
 }
+
+const LANE_PATH: &str = "/home/ibedwi/.herdr/worktrees/bli/scratch-bli-rm-fixture";
+
+#[test]
+fn remove_lane_removes_the_worktree_by_its_workspace() {
+    let runner =
+        FakeRunner::default().replying("worktree remove", &fixture("worktree_remove.json"));
+
+    herdr(&runner)
+        .remove_lane(Path::new(REPO), Path::new(LANE_PATH), Some("w9"), false)
+        .unwrap();
+
+    assert_eq!(
+        runner.calls(),
+        vec![vec!["herdr", "worktree", "remove", "--workspace", "w9"]]
+    );
+}
+
+#[test]
+fn remove_lane_passes_force_on() {
+    let runner =
+        FakeRunner::default().replying("worktree remove", &fixture("worktree_remove.json"));
+
+    herdr(&runner)
+        .remove_lane(Path::new(REPO), Path::new(LANE_PATH), Some("w9"), true)
+        .unwrap();
+
+    assert_eq!(
+        runner.calls(),
+        vec![vec![
+            "herdr",
+            "worktree",
+            "remove",
+            "--workspace",
+            "w9",
+            "--force"
+        ]]
+    );
+}
+
+#[test]
+fn remove_lane_opens_a_closed_workspace_first_so_it_can_be_removed() {
+    let runner = FakeRunner::default()
+        .replying("worktree open", &fixture("worktree_open.json"))
+        .replying("worktree remove", &fixture("worktree_remove.json"));
+
+    herdr(&runner)
+        .remove_lane(Path::new(REPO), Path::new(LANE_PATH), None, false)
+        .unwrap();
+
+    assert_eq!(
+        runner.calls(),
+        vec![
+            vec![
+                "herdr",
+                "worktree",
+                "open",
+                "--cwd",
+                REPO,
+                "--path",
+                LANE_PATH,
+                "--no-focus",
+                "--trust-repository",
+            ],
+            vec!["herdr", "worktree", "remove", "--workspace", "w9"],
+        ]
+    );
+}
+
+#[test]
+fn remove_lane_reports_herdrs_refusal() {
+    let runner =
+        FakeRunner::default().failing("worktree remove", &fixture("error_dirty_worktree.json"));
+
+    let err = herdr(&runner)
+        .remove_lane(Path::new(REPO), Path::new(LANE_PATH), Some("w9"), false)
+        .unwrap_err();
+
+    assert!(
+        err.to_string().contains("dirty_worktree_requires_force"),
+        "{err}"
+    );
+}
+
+#[test]
+fn current_workspace_is_the_one_herdr_says_this_pane_is_in() {
+    let runner = FakeRunner::default();
+    assert_eq!(
+        herdr(&runner).in_workspace(Some("w4")).current_workspace(),
+        Some("w4")
+    );
+    assert_eq!(herdr(&runner).current_workspace(), None);
+}

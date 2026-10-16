@@ -18,6 +18,7 @@ const START_TIMEOUT_MS: &str = "20000";
 pub struct Herdr<R> {
     runner: R,
     inside: bool,
+    workspace: Option<String>,
 }
 
 impl<R: ProcessRunner> Herdr<R> {
@@ -26,7 +27,14 @@ impl<R: ProcessRunner> Herdr<R> {
         Herdr {
             runner,
             inside: herdr_env == Some("1"),
+            workspace: None,
         }
+    }
+
+    /// `ws` is the value of `HERDR_WORKSPACE_ID`, which herdr sets to its pane's workspace.
+    pub fn in_workspace(mut self, ws: Option<&str>) -> Self {
+        self.workspace = ws.map(str::to_string);
+        self
     }
 
     /// Runs `herdr` with `args` and returns the `result` of its JSON reply.
@@ -125,6 +133,10 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
 
     fn is_inside(&self) -> bool {
         self.inside
+    }
+
+    fn current_workspace(&self) -> Option<&str> {
+        self.workspace.as_deref()
     }
 
     fn create_lane(&self, repo: &Path, lane: &NewLane) -> Result<CreatedLane, Error> {
@@ -236,6 +248,41 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
             Check::from_result("permission mode", self.server_running()),
         ]
     }
+
+    fn remove_lane(
+        &self,
+        repo: &Path,
+        path: &Path,
+        workspace: Option<&str>,
+        force: bool,
+    ) -> Result<(), Error> {
+        // `herdr worktree remove` only takes a workspace, so a closed one is reopened first.
+        let opened;
+        let workspace = match workspace {
+            Some(ws) => ws,
+            None => {
+                let repo = repo.to_string_lossy();
+                let path = path.to_string_lossy();
+                let reply: WorktreeOpened = self.herdr(&[
+                    "worktree",
+                    "open",
+                    "--cwd",
+                    &repo,
+                    "--path",
+                    &path,
+                    "--no-focus",
+                    "--trust-repository",
+                ])?;
+                opened = reply.workspace.workspace_id;
+                &opened
+            }
+        };
+        let mut args = vec!["worktree", "remove", "--workspace", workspace];
+        if force {
+            args.push("--force");
+        }
+        self.herdr_unit(&args)
+    }
 }
 
 /// `herdr <group> <verb>`, for messages.
@@ -271,6 +318,11 @@ struct WorktreeCreated {
     worktree: Worktree,
     workspace: Workspace,
     root_pane: Pane,
+}
+
+#[derive(Deserialize)]
+struct WorktreeOpened {
+    workspace: Workspace,
 }
 
 #[derive(Deserialize)]

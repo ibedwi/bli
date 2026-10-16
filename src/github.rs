@@ -154,17 +154,21 @@ impl<R: ProcessRunner> CodeHost for GitHub<R> {
             "--state",
             "all",
             "--json",
-            "number,url,state",
+            "number,url,state,createdAt",
+            "--limit",
+            "100",
         ])?;
-        let prs: Vec<Pr> = serde_json::from_str(&stdout)
+        let mut prs: Vec<Pr> = serde_json::from_str(&stdout)
             .map_err(|e| Error::new(format!("could not read `gh pr list` output: {e}")))?;
-        let mut prs: Vec<_> = prs.into_iter().map(Pr::into_pull_request).collect();
-        // `gh` lists the newest first; an open PR is the one still in play.
-        let open = prs.iter().position(|p| p.state == PrState::Open);
-        Ok(match open {
+        // An open PR is the one still in play; otherwise the newest, whatever order
+        // `gh` lists them in. RFC 3339 UTC timestamps sort as text.
+        let pick = match prs.iter().position(|p| p.state == "OPEN") {
             Some(i) => Some(prs.swap_remove(i)),
-            None => prs.into_iter().next(),
-        })
+            None => prs
+                .into_iter()
+                .max_by(|a, b| a.created_at.cmp(&b.created_at)),
+        };
+        Ok(pick.map(Pr::into_pull_request))
     }
 
     fn open_pr(&self, pr: &NewPullRequest) -> Result<PullRequest, Error> {
@@ -267,6 +271,8 @@ struct Assignee {
 #[derive(Deserialize)]
 struct Pr {
     number: u64,
+    #[serde(rename = "createdAt")]
+    created_at: String,
     url: String,
     state: String,
 }
