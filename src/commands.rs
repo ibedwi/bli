@@ -536,7 +536,19 @@ pub fn doctor(checks: &[Check], json: bool) -> Report {
             c.detail
         ));
         if let Some(hint) = &c.hint {
-            out.push_str(&format!("      hint: {hint}\n"));
+            // Indent every line of a multi-line hint under the first, leaving blank lines blank.
+            let mut lines = hint.lines();
+            out.push_str(&format!(
+                "      hint: {}\n",
+                lines.next().unwrap_or_default()
+            ));
+            for line in lines {
+                if !line.is_empty() {
+                    out.push_str("      ");
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
         }
     }
     Report {

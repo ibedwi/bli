@@ -114,3 +114,53 @@ fn doctor_warns_with_an_install_hint_when_git_is_missing() {
         "warn  git  could not run `git`: it is not installed\n      hint: install git (https://git-scm.com)\n"
     );
 }
+
+#[test]
+fn doctor_warns_on_a_missing_bli_toml_and_still_checks_git() {
+    let repo = Repo::new(GITHUB);
+    std::fs::remove_file(repo.path().join("bli.toml")).unwrap();
+    let fakes = Fakes {
+        tracker: FakeTracker::default().with_check(Check::pass("tracker auth", "logged in")),
+        host: FakeHost::default().with_check(Check::pass("host", "running")),
+        ..Default::default()
+    };
+
+    let out = bli(&["doctor", "--json"], repo.path(), &fakes);
+
+    assert_eq!(out.code, 1);
+    assert_eq!(out.stderr, "error: 1 of 2 checks failed\n");
+    let checks: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    let checks = checks["checks"].as_array().unwrap();
+    assert_eq!(checks.len(), 2, "{checks:?}");
+    assert_eq!(
+        checks[0],
+        json!({"name": "git", "status": "pass", "detail": "git version 2.51.0"})
+    );
+    assert_eq!(checks[1]["name"], "bli.toml");
+    assert_eq!(checks[1]["status"], "warn");
+    assert_eq!(checks[1]["detail"], "no bli.toml found in this repo");
+    assert!(
+        checks[1]["hint"].as_str().unwrap().contains("[tracker]"),
+        "{checks:?}"
+    );
+}
+
+#[test]
+fn doctor_indents_every_line_of_a_multi_line_hint() {
+    let repo = Repo::new(GITHUB);
+    let fakes = Fakes {
+        host: FakeHost::default().with_check(Check::warn(
+            "host",
+            &Error::new("not set up").with_hint("add this:\n\n[host]\nkind = \"x\""),
+        )),
+        ..Default::default()
+    };
+
+    let out = bli(&["doctor"], repo.path(), &fakes);
+
+    assert_eq!(
+        out.stdout,
+        "pass  git  git version 2.51.0\n\
+         warn  host  not set up\n      hint: add this:\n\n      [host]\n      kind = \"x\"\n"
+    );
+}

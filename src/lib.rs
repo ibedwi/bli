@@ -159,20 +159,11 @@ pub fn run(args: &[&str], cwd: &Path, providers: &dyn Providers) -> Outcome {
 }
 
 fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands::Report, Error> {
-    let config = Config::load(cwd)?;
-    // Doctor runs before opening the repo, so a missing git is a warning rather than an error.
+    // Doctor runs before loading bli.toml or opening the repo, so a problem with either is a warning.
     if let Command::Doctor = cli.command {
-        let mut checks = vec![git::check(providers.git_runner())];
-        match providers.issue_tracker(&config) {
-            Ok(tracker) => checks.extend(tracker.checks()),
-            Err(e) => checks.push(Check::warn("issue tracker", &e)),
-        }
-        match providers.lane_host(&config) {
-            Ok(host) => checks.extend(host.checks()),
-            Err(e) => checks.push(Check::warn("lane host", &e)),
-        }
-        return Ok(commands::doctor(&checks, cli.json));
+        return Ok(commands::doctor(&doctor_checks(cwd, providers), cli.json));
     }
+    let config = Config::load(cwd)?;
     let git = Git::open(cwd)?;
     match &cli.command {
         Command::Frontier { parent } => {
@@ -246,6 +237,28 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
             .map(Into::into)
         }
     }
+}
+
+/// Checks git, then bli.toml, then the configured providers. Without a usable
+/// bli.toml there are no providers to check, so their checks are left out.
+fn doctor_checks(cwd: &Path, providers: &dyn Providers) -> Vec<Check> {
+    let mut checks = vec![git::check(providers.git_runner())];
+    let config = match Config::load(cwd) {
+        Ok(config) => config,
+        Err(e) => {
+            checks.push(Check::warn(config::FILE_NAME, &e));
+            return checks;
+        }
+    };
+    match providers.issue_tracker(&config) {
+        Ok(tracker) => checks.extend(tracker.checks()),
+        Err(e) => checks.push(Check::warn("issue tracker", &e)),
+    }
+    match providers.lane_host(&config) {
+        Ok(host) => checks.extend(host.checks()),
+        Err(e) => checks.push(Check::warn("lane host", &e)),
+    }
+    checks
 }
 
 fn render_error(e: &Error) -> String {
