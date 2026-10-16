@@ -46,6 +46,21 @@ pub fn frontier(
     Ok(out)
 }
 
+/// A command's output, plus the failure to exit with when part of the work failed.
+pub struct Report {
+    pub stdout: String,
+    pub failure: Option<Error>,
+}
+
+impl From<String> for Report {
+    fn from(stdout: String) -> Self {
+        Report {
+            stdout,
+            failure: None,
+        }
+    }
+}
+
 pub struct StartRequest<'a> {
     pub tickets: &'a [String],
     pub base: Option<&'a str>,
@@ -59,7 +74,7 @@ pub fn lane_start(
     config: &Config,
     request: &StartRequest,
     json: bool,
-) -> Result<String, Error> {
+) -> Result<Report, Error> {
     if let Some(slug) = request.slug {
         if request.tickets.len() > 1 {
             return Err(
@@ -120,8 +135,19 @@ pub fn lane_start(
         }
         reports.push(report);
     }
+    let failed = reports
+        .iter()
+        .filter(|r| r.outcome == StartOutcome::Failed)
+        .count();
+    let failure = (failed > 0).then(|| {
+        Error::new(format!(
+            "{failed} of {} lanes failed to start",
+            reports.len()
+        ))
+    });
     if json {
-        return Ok(format!("{}\n", json!({ "base": base, "lanes": reports })));
+        let stdout = format!("{}\n", json!({ "base": base, "lanes": reports }));
+        return Ok(Report { stdout, failure });
     }
     let mut out = String::new();
     for r in &reports {
@@ -141,7 +167,10 @@ pub fn lane_start(
             detail
         ));
     }
-    Ok(out)
+    Ok(Report {
+        stdout: out,
+        failure,
+    })
 }
 
 /// Starts the lane for `report`'s ticket, or says why it was skipped, filling in

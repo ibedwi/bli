@@ -10,7 +10,7 @@ Start one **lane** per ticket through `bli`, which creates the lane on the repo'
 
 Arguments: ticket IDs (`/fan-out 20 24 40`), a parent ticket (`/fan-out parent=17`), or nothing, which means the frontier of the parent set in `bli.toml`. Add `base=<branch>` to cut lanes from that branch instead of the configured base.
 
-Every `bli` command takes `--json`; read its output rather than its text. On a non-zero exit, show the developer the stderr (it carries a `hint:`) and stop.
+Every `bli` command takes `--json`; read its output rather than its text. On a non-zero exit with nothing on stdout, show the developer the stderr (it carries a `hint:`) and stop.
 
 ## 1. Pick the tickets
 
@@ -27,7 +27,7 @@ This step is done when the developer has confirmed the list. An empty frontier e
 bli lane start <id>... --json        # add --base <branch> when base= was given
 ```
 
-`bli` starts the lanes one at a time and reports each one in `lanes`, with an `outcome`:
+`bli` starts the lanes one at a time and reports each one in `lanes`, with an `outcome`. It exits 1 when any lane failed, with the JSON still on stdout: carry on and report every lane.
 
 - `started`: the lane exists, the ticket is claimed, and its agent was prompted. `status` is the host's hint about the agent: `working`, `blocked`, `idle` or `unknown`.
 - `skipped`: the ticket already has a lane or a claim; `reason` says which.

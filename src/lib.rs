@@ -112,12 +112,24 @@ pub fn run(args: &[&str], cwd: &Path, providers: &dyn Providers) -> Outcome {
         }
     };
     match dispatch(&cli, cwd, providers) {
-        Ok(stdout) => Outcome::success(stdout),
+        Ok(commands::Report {
+            stdout,
+            failure: None,
+        }) => Outcome::success(stdout),
+        // Part of the work failed: keep its output, so a caller can see what did succeed.
+        Ok(commands::Report {
+            stdout,
+            failure: Some(e),
+        }) => Outcome {
+            code: 1,
+            stdout,
+            stderr: render_error(&e),
+        },
         Err(e) => Outcome::failure(1, render_error(&e)),
     }
 }
 
-fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<String, Error> {
+fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands::Report, Error> {
     let config = Config::load(cwd)?;
     let git = Git::open(cwd)?;
     match &cli.command {
@@ -132,6 +144,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<String, 
                 parent.as_deref(),
                 cli.json,
             )
+            .map(Into::into)
         }
         Command::Lane(LaneCommand::Start {
             tickets,
@@ -156,7 +169,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<String, 
         }
         Command::Lane(LaneCommand::List) => {
             let host = providers.lane_host(&config)?;
-            commands::lane_list(host.as_ref(), &git, &config, cli.json)
+            commands::lane_list(host.as_ref(), &git, &config, cli.json).map(Into::into)
         }
     }
 }

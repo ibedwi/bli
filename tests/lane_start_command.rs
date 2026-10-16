@@ -275,7 +275,9 @@ fn lane_start_reports_each_lanes_outcome_and_keeps_going_after_a_failure() {
         &fakes,
     );
 
-    let lanes = json(&out)["lanes"].clone();
+    assert_eq!(out.code, 1);
+    assert_eq!(out.stderr, "error: 2 of 3 lanes failed to start\n");
+    let lanes = serde_json::from_str::<serde_json::Value>(&out.stdout).unwrap()["lanes"].clone();
     assert_eq!(lanes[0]["ticket"], "3");
     assert_eq!(lanes[0]["outcome"], "failed");
     assert_eq!(lanes[0]["error"], "could not create ticket/3-first");
@@ -326,7 +328,8 @@ fn lane_start_reports_a_lane_whose_agent_failed_to_start_with_its_branch() {
 
     let out = bli(&["lane", "start", "3", "--json"], repo.path(), &fakes);
 
-    let lane = json(&out)["lanes"][0].clone();
+    assert_eq!(out.code, 1);
+    let lane = serde_json::from_str::<serde_json::Value>(&out.stdout).unwrap()["lanes"][0].clone();
     assert_eq!(lane["outcome"], "failed");
     assert_eq!(lane["error"], "agent_not_ready");
     assert_eq!(lane["branch"], "ticket/3-fan-out");
@@ -345,4 +348,18 @@ fn lane_start_starts_a_ticket_named_twice_only_once() {
     assert_eq!(lanes[0]["outcome"], "started");
     assert_eq!(lanes[1]["outcome"], "skipped");
     assert_eq!(fakes.host.created().len(), 1);
+}
+
+#[test]
+fn lane_start_exits_zero_when_lanes_are_only_skipped() {
+    let repo = Repo::new(GITHUB);
+    let fakes = Fakes {
+        tracker: FakeTracker::default().with_assigned_ticket("4", "Claimed", &["someone"]),
+        ..Default::default()
+    };
+
+    let out = bli(&["lane", "start", "4", "--json"], repo.path(), &fakes);
+
+    assert_eq!(json(&out)["lanes"][0]["outcome"], "skipped");
+    assert_eq!(out.stderr, "");
 }
