@@ -163,7 +163,6 @@ pub struct FakeHost {
     failing_branches: Vec<String>,
     agents_fail: bool,
     agent_output: HashMap<String, String>,
-    read: RefCell<Vec<(String, u32)>>,
 }
 
 impl Default for FakeHost {
@@ -178,7 +177,6 @@ impl Default for FakeHost {
             failing_branches: Vec::new(),
             agents_fail: false,
             agent_output: HashMap::new(),
-            read: RefCell::new(Vec::new()),
         }
     }
 }
@@ -237,11 +235,6 @@ impl FakeHost {
         self.agent_output
             .insert(ticket_id.to_string(), output.to_string());
         self
-    }
-
-    /// Every agent read, as (ticket ID, lines).
-    pub fn read(&self) -> Vec<(String, u32)> {
-        self.read.borrow().clone()
     }
 
     /// Every lane creation asked for, with the repo it was asked from.
@@ -306,12 +299,15 @@ impl LaneHost for FakeHost {
         Ok(self.start_status)
     }
 
+    /// The last `lines` lines of the agent's output, as a host would read them.
     fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error> {
-        self.read.borrow_mut().push((ticket_id.to_string(), lines));
-        self.agent_output
+        let output = self
+            .agent_output
             .get(ticket_id)
-            .cloned()
-            .ok_or_else(|| Error::new(format!("no agent t{ticket_id}")))
+            .ok_or_else(|| Error::new(format!("no agent t{ticket_id}")))?;
+        let all: Vec<_> = output.lines().collect();
+        let start = all.len().saturating_sub(lines as usize);
+        Ok(all[start..].iter().map(|l| format!("{l}\n")).collect())
     }
 
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {

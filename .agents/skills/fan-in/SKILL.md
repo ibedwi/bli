@@ -18,7 +18,7 @@ bli lane list --json
 
 Each lane has `ticket`, `branch`, `base`, `path`, `workspace`, `status` and `pr` (`null`, or `number`, `url` and `state`: `open`, `merged` or `closed`).
 
-`status` is the lane host's **hint** about the agent: `working`, `blocked`, `idle` or `unknown`. It is advisory. A host can report `idle` for an agent waiting on a question, or `working` for one that has stopped: the lane's output is the evidence, the hint only says where to look first.
+`status` is the lane host's **hint** about the agent: `working`, `blocked`, `idle` or `unknown`. It is advisory: a host can report `idle` for an agent that is waiting on a question, or one that is finished. The lane's output is the evidence; the hint only says which lanes to read.
 
 ## 2. Act on each lane
 
@@ -37,7 +37,7 @@ Each lane has `ticket`, `branch`, `base`, `path`, `workspace`, `status` and `pr`
 - **Stalled**: stopped without finishing, e.g. on an error it gave up on, or saying it couldn't complete. Report it with the relevant output.
 - **Finished**: says the work is done and committed. **Ship it.**
 
-When the output leaves you unsure, treat the lane as stalled and show the developer, rather than ship.
+When the output leaves you unsure, treat the lane as stalled: show the developer and let them decide.
 
 **Ship it.**
 1. Write the PR body with the `pr` skill, from the lane's ticket and its commits (`git -C <path> log --oneline origin/<base>..HEAD`), to a file in your scratch directory.
