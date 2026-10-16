@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::check::Check;
 use crate::error::Error;
 
 /// The host's view of what a lane's agent is doing. Advisory: `bli` only reports it.
@@ -79,6 +80,9 @@ pub trait LaneHost {
 
     /// Every checkout of the repo whose main checkout is `repo`, as the host sees them now.
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error>;
+
+    /// Checks the host's tools, and that it starts agents in bypass-permissions mode, for `bli doctor`.
+    fn checks(&self) -> Vec<Check>;
 }
 
 impl<T: LaneHost + ?Sized> LaneHost for &T {
@@ -109,5 +113,9 @@ impl<T: LaneHost + ?Sized> LaneHost for &T {
 
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {
         (**self).list(repo)
+    }
+
+    fn checks(&self) -> Vec<Check> {
+        (**self).checks()
     }
 }

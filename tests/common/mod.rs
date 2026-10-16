@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bli::check::Check;
 use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::config::Config;
 use bli::error::Error;
@@ -22,6 +23,7 @@ pub struct FakeTracker {
     frontiers: HashMap<String, Vec<Ticket>>,
     tickets: HashMap<String, TicketDetails>,
     claimed: RefCell<Vec<String>>,
+    checks: Vec<Check>,
 }
 
 impl FakeTracker {
@@ -47,6 +49,11 @@ impl FakeTracker {
                 claimed_by: assignees.iter().map(|a| a.to_string()).collect(),
             },
         );
+        self
+    }
+
+    pub fn with_check(mut self, check: Check) -> Self {
+        self.checks.push(check);
         self
     }
 
@@ -87,6 +94,10 @@ impl IssueTracker for FakeTracker {
     /// Marks the body, so tests can see the tracker had its say.
     fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
         Ok(format!("{body}[closes {id}]\n"))
+    }
+
+    fn checks(&self) -> Vec<Check> {
+        self.checks.clone()
     }
 }
 
@@ -163,6 +174,7 @@ pub struct FakeHost {
     failing_branches: Vec<String>,
     agents_fail: bool,
     agent_output: HashMap<String, String>,
+    checks: Vec<Check>,
 }
 
 impl Default for FakeHost {
@@ -177,6 +189,7 @@ impl Default for FakeHost {
             failing_branches: Vec::new(),
             agents_fail: false,
             agent_output: HashMap::new(),
+            checks: Vec::new(),
         }
     }
 }
@@ -234,6 +247,11 @@ impl FakeHost {
     pub fn with_agent_output(mut self, ticket_id: &str, output: &str) -> Self {
         self.agent_output
             .insert(ticket_id.to_string(), output.to_string());
+        self
+    }
+
+    pub fn with_check(mut self, check: Check) -> Self {
+        self.checks.push(check);
         self
     }
 
@@ -314,6 +332,10 @@ impl LaneHost for FakeHost {
         self.listed_from.borrow_mut().push(repo.to_path_buf());
         Ok(self.checkouts.borrow().clone())
     }
+
+    fn checks(&self) -> Vec<Check> {
+        self.checks.clone()
+    }
 }
 
 /// The providers a test hands to `bli::run`.
@@ -322,10 +344,15 @@ pub struct Fakes {
     pub tracker: FakeTracker,
     pub host: FakeHost,
     pub code: FakeCodeHost,
+    /// Makes building the issue tracker fail, as for a tracker `bli` does not support yet.
+    pub tracker_unsupported: bool,
 }
 
 impl Providers for Fakes {
     fn issue_tracker(&self, _config: &Config) -> Result<Box<dyn IssueTracker + '_>, Error> {
+        if self.tracker_unsupported {
+            return Err(Error::new("unsupported issue tracker"));
+        }
         Ok(Box::new(&self.tracker))
     }
 

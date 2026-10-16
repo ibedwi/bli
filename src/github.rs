@@ -5,6 +5,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::check::Check;
 use crate::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use crate::error::Error;
 use crate::git::REMOTE;
@@ -116,6 +117,23 @@ impl<R: ProcessRunner> IssueTracker for GitHub<R> {
         let body = body.trim_end();
         Ok(format!("{body}\n\nCloses #{number}\n"))
     }
+
+    fn checks(&self) -> Vec<Check> {
+        let version = self
+            .gh(&["--version"])
+            .map(|out| out.lines().next().unwrap_or_default().to_string());
+        let auth = self
+            .gh(&["auth", "status"])
+            .map(|out| logged_in_account(&out))
+            .map_err(|e| match e.hint() {
+                Some(_) => e,
+                None => e.with_hint("run `gh auth login`"),
+            });
+        vec![
+            Check::from_result("gh", version),
+            Check::from_result("gh auth", auth),
+        ]
+    }
 }
 
 impl<R: ProcessRunner> CodeHost for GitHub<R> {
@@ -184,6 +202,15 @@ fn closes(body: &str, number: u64) -> bool {
         let reference = pair[1].trim_end_matches(|c: char| c.is_ascii_punctuation());
         KEYWORDS.contains(&keyword.as_str()) && reference == format!("#{number}")
     })
+}
+
+/// The "Logged in to ..." line of `gh auth status`.
+fn logged_in_account(out: &str) -> String {
+    out.lines()
+        .map(|l| l.trim().trim_start_matches('✓').trim())
+        .find(|l| l.starts_with("Logged in"))
+        .unwrap_or("logged in")
+        .to_string()
 }
 
 /// A GitHub ticket ID is an issue number, optionally written `#12`.

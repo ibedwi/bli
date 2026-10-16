@@ -12,3 +12,5 @@ Real output of herdr 0.9.3, saved 2026-10-16 using a throwaway `scratch/bli-fixt
 - `error_agent_not_found.json`: the stderr of `herdr agent wait` on an unknown agent. herdr reports errors this way, as JSON on stderr with a non-zero exit.
 
 `herdr worktree create --cwd <linked worktree>` fails with `linked_worktree_source`, which is why `bli` always passes the main checkout.
+- `status_server_running.json`: `herdr status server --json` with the server running. Unlike the socket API commands, its reply is not wrapped in `result`.
+- `status_server_not_running.json`: `herdr --session bli-fixture status server --json`, for a session with no server. It exits 0 all the same.

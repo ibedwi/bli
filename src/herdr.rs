@@ -7,9 +7,10 @@ use std::path::{Path, PathBuf};
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::Deserialize;
 
+use crate::check::Check;
 use crate::error::Error;
 use crate::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
-use crate::process::ProcessRunner;
+use crate::process::{Output, ProcessRunner};
 
 /// How long to wait for a new agent to start working before reporting its status as unknown.
 const START_TIMEOUT_MS: &str = "20000";
@@ -47,13 +48,7 @@ impl<R: ProcessRunner> Herdr<R> {
     /// Like [`Herdr::try_herdr`], for the commands that reply with plain text rather than JSON.
     fn try_herdr_text(&self, args: &[&str]) -> Result<Result<String, ErrorBody>, Error> {
         let command = command(args);
-        let out = self.runner.run("herdr", args).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => Error::new("could not run `herdr`: it is not installed")
-                .with_hint(
-                    "install herdr (https://herdr.dev), or change `host` under [lane] in bli.toml",
-                ),
-            _ => Error::new(format!("could not run `herdr`: {e}")),
-        })?;
+        let out = self.run(args)?;
         if !out.success {
             return match serde_json::from_str::<ErrorReply>(&out.stderr) {
                 Ok(reply) => Ok(Err(reply.error)),
@@ -64,6 +59,47 @@ impl<R: ProcessRunner> Herdr<R> {
             };
         }
         Ok(Ok(out.stdout))
+    }
+
+    /// Runs `herdr` with `args`, failing only when it could not be run at all.
+    fn run(&self, args: &[&str]) -> Result<Output, Error> {
+        self.runner.run("herdr", args).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => Error::new("could not run `herdr`: it is not installed")
+                .with_hint(
+                    "install herdr (https://herdr.dev), or change `host` under [lane] in bli.toml",
+                ),
+            _ => Error::new(format!("could not run `herdr`: {e}")),
+        })
+    }
+
+    /// Runs a `herdr` command outside the socket API, whose plain stdout is its reply.
+    fn run_plain(&self, args: &[&str]) -> Result<String, Error> {
+        let out = self.run(args)?;
+        if !out.success {
+            return Err(Error::new(format!(
+                "`{}` failed: {}",
+                command(args),
+                out.stderr.trim()
+            )));
+        }
+        Ok(out.stdout)
+    }
+
+    /// Whether the herdr server is up to take commands. `bli` passes the
+    /// permission-mode flag itself in [`LaneHost::start_agent`], so that is all
+    /// the permission-mode check needs.
+    fn server_running(&self) -> Result<String, Error> {
+        let stdout = self.run_plain(&["status", "server", "--json"])?;
+        let status: ServerStatus = serde_json::from_str(&stdout)
+            .map_err(|e| Error::new(format!("could not read `herdr status` output: {e}")))?;
+        if !status.running {
+            return Err(Error::new("the herdr server is not running")
+                .with_hint("start herdr by running `herdr`"));
+        }
+        Ok(
+            "herdr is running, and bli starts Claude with --permission-mode bypassPermissions"
+                .into(),
+        )
     }
 
     /// Like [`Herdr::herdr`], for commands whose reply `bli` doesn't need.
@@ -191,12 +227,27 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
             })
             .collect())
     }
+    fn checks(&self) -> Vec<Check> {
+        let version = self
+            .run_plain(&["--version"])
+            .map(|out| out.trim().to_string());
+        vec![
+            Check::from_result("herdr", version),
+            Check::from_result("permission mode", self.server_running()),
+        ]
+    }
 }
 
 /// `herdr <group> <verb>`, for messages.
 fn command(args: &[&str]) -> String {
     let words: Vec<_> = args.iter().take(2).copied().collect();
     format!("herdr {}", words.join(" "))
+}
+
+/// `herdr status server --json` output, which is not wrapped in a `result` like socket API replies.
+#[derive(Deserialize)]
+struct ServerStatus {
+    running: bool,
 }
 
 #[derive(Deserialize)]

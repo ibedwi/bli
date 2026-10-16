@@ -1,4 +1,5 @@
 pub mod branch;
+pub mod check;
 pub mod code_host;
 pub mod config;
 pub mod error;
@@ -15,11 +16,13 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
+use crate::check::Check;
 use crate::code_host::CodeHost;
 use crate::config::Config;
 use crate::error::Error;
 use crate::git::Git;
 use crate::host::LaneHost;
+use crate::process::SystemRunner;
 use crate::tracker::IssueTracker;
 
 /// Builds the providers a repo's config asks for. The real one runs real tools; tests pass fakes.
@@ -72,6 +75,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check this repo's setup before a fan-out: tools, credentials and the lane host
+    Doctor,
     /// List the tickets under a parent that can be started now
     Frontier {
         /// The parent ticket; defaults to `[tracker] parent` in bli.toml
@@ -153,6 +158,19 @@ pub fn run(args: &[&str], cwd: &Path, providers: &dyn Providers) -> Outcome {
 
 fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands::Report, Error> {
     let config = Config::load(cwd)?;
+    // Doctor runs before opening the repo, so a missing git is a warning rather than an error.
+    if let Command::Doctor = cli.command {
+        let mut checks = vec![git::check(&SystemRunner)];
+        match providers.issue_tracker(&config) {
+            Ok(tracker) => checks.extend(tracker.checks()),
+            Err(e) => checks.push(Check::warn("issue tracker", &e)),
+        }
+        match providers.lane_host(&config) {
+            Ok(host) => checks.extend(host.checks()),
+            Err(e) => checks.push(Check::warn("lane host", &e)),
+        }
+        return Ok(commands::doctor(&checks, cli.json));
+    }
     let git = Git::open(cwd)?;
     match &cli.command {
         Command::Frontier { parent } => {
@@ -189,6 +207,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
                 cli.json,
             )
         }
+        Command::Doctor => unreachable!("handled above"),
         Command::Lane(LaneCommand::List) => {
             let host = providers.lane_host(&config)?;
             let code = providers.code_host(&config)?;
