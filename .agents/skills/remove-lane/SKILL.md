@@ -49,6 +49,8 @@ Name the lane by its `branch` from the report, which is unambiguous:
 bli lane rm <branch> --json      # add --delete-branch and --force only on an explicit yes
 ```
 
-`bli` refuses the main checkout, the lane it is running from, files that would be lost without `--force`, and deleting a branch with unpushed commits without `--force`. On a refusal, show the developer the stderr; retry only with a new explicit yes to the choice it names.
+On a refusal, show the developer the stderr; retry only with a new explicit yes to the choice it names.
 
 Report what `bli` removed: the lane's path, and whether its branch was deleted (`branch_deleted`) or kept.
+
+This step is done when `bli lane rm` has exited 0 and the developer has the report, or has seen its refusal.

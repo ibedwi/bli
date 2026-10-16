@@ -47,8 +47,10 @@ impl Git {
         &self.main
     }
 
+    /// Fetches the remote, pruning tracking refs of branches it no longer has, so they
+    /// don't count commits as pushed after the remote branch is gone.
     pub fn fetch(&self) -> Result<(), Error> {
-        self.git(&["fetch", "--quiet", REMOTE]).map(drop)
+        self.git(&["fetch", "--quiet", "--prune", REMOTE]).map(drop)
     }
 
     /// Whether `branch` exists on the remote, as of the last fetch.

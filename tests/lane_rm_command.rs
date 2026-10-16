@@ -245,3 +245,20 @@ fn lane_rm_says_what_it_removed() {
         )
     );
 }
+
+#[test]
+fn lane_rm_counts_commits_whose_remote_branch_was_deleted_as_unpushed() {
+    let (repo, path, fakes) = lane();
+    git(
+        &path,
+        &["commit", "-q", "--allow-empty", "-m", "Pushed once"],
+    );
+    git(&path, &["push", "-q", "origin", BRANCH]);
+    // The remote branch goes away, leaving this checkout's tracking ref stale.
+    git(&repo.remote, &["branch", "-D", BRANCH]);
+
+    let out = bli(&["lane", "rm", "4", "--delete-branch"], repo.path(), &fakes);
+
+    assert_refused(&out, &fakes, "Pushed once");
+    assert!(branch_exists(&repo, BRANCH));
+}

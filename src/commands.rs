@@ -505,6 +505,7 @@ struct Inspection {
 }
 
 fn inspect(code: &dyn CodeHost, git: &Git, lane: Lane) -> Result<Inspection, Error> {
+    git.fetch()?;
     Ok(Inspection {
         changes: git.changes(&lane.path)?,
         unpushed: git.unpushed(&lane.branch)?,
@@ -598,6 +599,7 @@ pub fn lane_rm(
         .with_hint("commit or remove them, or pass --force to lose them"));
     }
     if request.delete_branch && !request.force {
+        git.fetch()?;
         let unpushed = git.unpushed(&lane.branch)?;
         if !unpushed.is_empty() {
             let commits: Vec<_> = unpushed
