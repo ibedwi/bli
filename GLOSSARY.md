@@ -45,3 +45,7 @@ _Avoid_: Terminal, workspace manager, runner
 **Issue tracker**:
 The tool where tickets live.
 _Avoid_: Project management, PM tool, board
+
+**Code host**:
+The tool where lane branches are pushed and their pull requests are opened.
+_Avoid_: Remote, forge

@@ -2,12 +2,13 @@
 
 mod common;
 
+use bli::code_host::PrState;
 use bli::host::StatusHint;
 use common::*;
 use serde_json::json;
 
 #[test]
-fn lane_list_shows_each_lane_with_its_ticket_branch_base_and_status_hint() {
+fn lane_list_shows_each_lane_with_its_ticket_branch_base_pr_and_status_hint() {
     let repo = Repo::new(GITHUB);
     git(
         repo.path(),
@@ -18,6 +19,7 @@ fn lane_list_shows_each_lane_with_its_ticket_branch_base_and_status_hint() {
             .with_main_checkout("main")
             .with_checkout("ticket/3-fan-out", StatusHint::Working)
             .with_checkout("ticket/7-doctor", StatusHint::Blocked),
+        code: FakeCodeHost::default().with_pr("ticket/3-fan-out", 12, PrState::Merged),
         ..Default::default()
     };
 
@@ -28,9 +30,11 @@ fn lane_list_shows_each_lane_with_its_ticket_branch_base_and_status_hint() {
         json!({
             "lanes": [
                 {"ticket": "3", "branch": "ticket/3-fan-out", "base": "main",
-                 "path": "/lanes/ticket-3-fan-out", "workspace": "w11", "status": "working"},
+                 "path": "/lanes/ticket-3-fan-out", "workspace": "w11", "status": "working",
+                 "pr": {"number": 12, "url": "https://code.test/pull/12", "state": "merged"}},
                 {"ticket": "7", "branch": "ticket/7-doctor", "base": "release",
-                 "path": "/lanes/ticket-7-doctor", "workspace": "w12", "status": "blocked"},
+                 "path": "/lanes/ticket-7-doctor", "workspace": "w12", "status": "blocked",
+                 "pr": null},
             ]
         })
     );
@@ -85,7 +89,10 @@ fn lane_list_ignores_the_main_checkout_even_on_a_lane_branch() {
 fn lane_list_prints_a_readable_list() {
     let repo = Repo::new(GITHUB);
     let fakes = Fakes {
-        host: FakeHost::default().with_checkout("ticket/3-fan-out", StatusHint::Blocked),
+        host: FakeHost::default()
+            .with_checkout("ticket/3-fan-out", StatusHint::Blocked)
+            .with_checkout("ticket/7-doctor", StatusHint::Idle),
+        code: FakeCodeHost::default().with_pr("ticket/7-doctor", 12, PrState::Open),
         ..Default::default()
     };
 
@@ -94,7 +101,8 @@ fn lane_list_prints_a_readable_list() {
     assert_eq!(out.code, 0, "stderr: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "3  ticket/3-fan-out  (base main, blocked)\n    /lanes/ticket-3-fan-out\n"
+        "3  ticket/3-fan-out  (base main, blocked, no PR)\n    /lanes/ticket-3-fan-out\n\
+         7  ticket/7-doctor  (base main, idle, PR #12 open)\n    /lanes/ticket-7-doctor\n"
     );
 }
 

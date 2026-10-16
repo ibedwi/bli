@@ -363,3 +363,35 @@ fn start_agent_fails_when_waiting_for_the_agent_fails_for_another_reason() {
 
     assert!(err.to_string().contains("agent_not_found"), "{err}");
 }
+
+#[test]
+fn read_agent_reads_the_lanes_agents_recent_output_unwrapped() {
+    let runner = FakeRunner::default().replying("agent read", &fixture("agent_read.txt"));
+
+    let output = herdr(&runner).read_agent("5", 60).unwrap();
+
+    assert_eq!(
+        runner.calls(),
+        vec![vec![
+            "herdr",
+            "agent",
+            "read",
+            "t5",
+            "--source",
+            "recent-unwrapped",
+            "--lines",
+            "60",
+        ]]
+    );
+    assert_eq!(output, fixture("agent_read.txt"));
+}
+
+#[test]
+fn read_agent_reports_an_unknown_agent() {
+    let runner =
+        FakeRunner::default().failing("agent read", &fixture("error_agent_read_not_found.json"));
+
+    let err = herdr(&runner).read_agent("5", 60).unwrap_err();
+
+    assert!(err.to_string().contains("agent_not_found"), "{err}");
+}

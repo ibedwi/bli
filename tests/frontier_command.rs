@@ -230,6 +230,7 @@ fn frontier_leaves_out_tickets_that_already_have_a_lane() {
             .with_main_checkout("main")
             .with_checkout("ticket/3-fan-out", StatusHint::Working)
             .with_checkout("scratch/7-not-a-lane", StatusHint::Idle),
+        ..Default::default()
     };
 
     let out = bli(

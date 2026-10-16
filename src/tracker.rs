@@ -30,6 +30,10 @@ pub trait IssueTracker {
 
     /// Claims the ticket for the current user.
     fn claim(&self, id: &str) -> Result<(), Error>;
+
+    /// The body for a pull request shipping ticket `id`, given the `body` written for it:
+    /// on a tracker that reads pull requests, one that closes the ticket on merge.
+    fn pr_body(&self, id: &str, body: &str) -> Result<String, Error>;
 }
 
 impl<T: IssueTracker + ?Sized> IssueTracker for &T {
@@ -43,5 +47,9 @@ impl<T: IssueTracker + ?Sized> IssueTracker for &T {
 
     fn claim(&self, id: &str) -> Result<(), Error> {
         (**self).claim(id)
+    }
+
+    fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
+        (**self).pr_body(id, body)
     }
 }

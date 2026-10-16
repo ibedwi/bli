@@ -1,5 +1,5 @@
 //! Fakes and fixtures shared by the command-layer tests: an in-memory issue
-//! tracker and lane host, and a real git repo with a local bare remote.
+//! tracker, lane host and code host, and a real git repo with a local bare remote.
 
 #![allow(dead_code)]
 
@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::config::Config;
 use bli::error::Error;
 use bli::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
@@ -82,6 +83,73 @@ impl IssueTracker for FakeTracker {
         self.claimed.borrow_mut().push(id.to_string());
         Ok(())
     }
+
+    /// Marks the body, so tests can see the tracker had its say.
+    fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
+        Ok(format!("{body}[closes {id}]\n"))
+    }
+}
+
+/// A code host holding pull requests in memory, which records pushes and the PRs it opens.
+#[derive(Default)]
+pub struct FakeCodeHost {
+    prs: RefCell<Vec<(String, PullRequest)>>,
+    pushed: RefCell<Vec<(PathBuf, String)>>,
+    opened: RefCell<Vec<NewPullRequest>>,
+}
+
+impl FakeCodeHost {
+    /// Adds PR `number` from branch `head`, in `state`.
+    pub fn with_pr(self, head: &str, number: u64, state: PrState) -> Self {
+        self.prs
+            .borrow_mut()
+            .push((head.to_string(), pr(number, state)));
+        self
+    }
+
+    /// Every push, as (repo, branch).
+    pub fn pushed(&self) -> Vec<(PathBuf, String)> {
+        self.pushed.borrow().clone()
+    }
+
+    pub fn opened(&self) -> Vec<NewPullRequest> {
+        self.opened.borrow().clone()
+    }
+}
+
+pub fn pr(number: u64, state: PrState) -> PullRequest {
+    PullRequest {
+        number,
+        url: format!("https://code.test/pull/{number}"),
+        state,
+    }
+}
+
+impl CodeHost for FakeCodeHost {
+    fn push(&self, repo: &Path, branch: &str) -> Result<(), Error> {
+        self.pushed
+            .borrow_mut()
+            .push((repo.to_path_buf(), branch.to_string()));
+        Ok(())
+    }
+
+    fn find_pr(&self, head: &str) -> Result<Option<PullRequest>, Error> {
+        Ok(self
+            .prs
+            .borrow()
+            .iter()
+            .find(|(h, _)| h == head)
+            .map(|(_, pr)| pr.clone()))
+    }
+
+    fn open_pr(&self, new: &NewPullRequest) -> Result<PullRequest, Error> {
+        self.opened.borrow_mut().push(new.clone());
+        let opened = pr(100 + self.prs.borrow().len() as u64, PrState::Open);
+        self.prs
+            .borrow_mut()
+            .push((new.head.clone(), opened.clone()));
+        Ok(opened)
+    }
 }
 
 /// A lane host holding its checkouts in memory. Lanes it creates show up in its list.
@@ -94,6 +162,8 @@ pub struct FakeHost {
     start_status: StatusHint,
     failing_branches: Vec<String>,
     agents_fail: bool,
+    agent_output: HashMap<String, String>,
+    read: RefCell<Vec<(String, u32)>>,
 }
 
 impl Default for FakeHost {
@@ -107,6 +177,8 @@ impl Default for FakeHost {
             start_status: StatusHint::Working,
             failing_branches: Vec::new(),
             agents_fail: false,
+            agent_output: HashMap::new(),
+            read: RefCell::new(Vec::new()),
         }
     }
 }
@@ -158,6 +230,18 @@ impl FakeHost {
     pub fn failing_to_start_agents(mut self) -> Self {
         self.agents_fail = true;
         self
+    }
+
+    /// Gives ticket `ticket_id`'s agent `output` to read.
+    pub fn with_agent_output(mut self, ticket_id: &str, output: &str) -> Self {
+        self.agent_output
+            .insert(ticket_id.to_string(), output.to_string());
+        self
+    }
+
+    /// Every agent read, as (ticket ID, lines).
+    pub fn read(&self) -> Vec<(String, u32)> {
+        self.read.borrow().clone()
     }
 
     /// Every lane creation asked for, with the repo it was asked from.
@@ -222,6 +306,14 @@ impl LaneHost for FakeHost {
         Ok(self.start_status)
     }
 
+    fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error> {
+        self.read.borrow_mut().push((ticket_id.to_string(), lines));
+        self.agent_output
+            .get(ticket_id)
+            .cloned()
+            .ok_or_else(|| Error::new(format!("no agent t{ticket_id}")))
+    }
+
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {
         self.listed_from.borrow_mut().push(repo.to_path_buf());
         Ok(self.checkouts.borrow().clone())
@@ -233,6 +325,7 @@ impl LaneHost for FakeHost {
 pub struct Fakes {
     pub tracker: FakeTracker,
     pub host: FakeHost,
+    pub code: FakeCodeHost,
 }
 
 impl Providers for Fakes {
@@ -242,6 +335,10 @@ impl Providers for Fakes {
 
     fn lane_host(&self, _config: &Config) -> Result<Box<dyn LaneHost + '_>, Error> {
         Ok(Box::new(&self.host))
+    }
+
+    fn code_host(&self, _config: &Config) -> Result<Box<dyn CodeHost + '_>, Error> {
+        Ok(Box::new(&self.code))
     }
 }
 
@@ -329,6 +426,20 @@ impl Repo {
         );
         git(&other, &["push", "-q", "origin", branch]);
         git(&other, &["rev-parse", "HEAD"])
+    }
+
+    /// Adds a linked checkout of a new `branch` with one commit beyond `main`.
+    pub fn add_lane_with_commit(&self, branch: &str) -> PathBuf {
+        let path = self.add_worktree(branch);
+        git(&path, &["commit", "-q", "--allow-empty", "-m", "work"]);
+        path
+    }
+
+    /// Writes `text` to a file outside the checkout and returns its path.
+    pub fn write_file(&self, name: &str, text: &str) -> PathBuf {
+        let path = self.root.parent().unwrap().join(name);
+        std::fs::write(&path, text).unwrap();
+        path
     }
 
     /// Adds a linked checkout of a new branch, as a lane host would.

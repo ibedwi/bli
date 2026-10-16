@@ -226,6 +226,7 @@ fn lane_start_skips_tickets_that_already_have_a_lane_or_a_claim() {
             .with_assigned_ticket("4", "Claimed", &["someone"])
             .with_ticket("5", "Free"),
         host: FakeHost::default().with_checkout("ticket/3-old-slug", StatusHint::Idle),
+        ..Default::default()
     };
 
     let out = bli(
@@ -267,6 +268,7 @@ fn lane_start_reports_each_lanes_outcome_and_keeps_going_after_a_failure() {
         host: FakeHost::default()
             .failing_to_create("ticket/3-first")
             .starting_agents_as(StatusHint::Blocked),
+        ..Default::default()
     };
 
     let out = bli(
