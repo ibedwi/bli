@@ -2,17 +2,21 @@
 //! `gh` command line and that saved real `gh` output parses correctly.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
 
+use bli::check::CheckStatus;
 use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::github::GitHub;
 use bli::process::{Output, ProcessRunner};
 use bli::tracker::{IssueTracker, Ticket, TicketDetails};
 
-/// Records every command it is asked to run and answers with a canned output.
+/// Records every command it is asked to run and answers with a canned output,
+/// or with each of a sequence of outputs in turn.
 struct FakeRunner {
     output: io::Result<Output>,
+    queued: RefCell<VecDeque<Output>>,
     calls: RefCell<Vec<Vec<String>>>,
 }
 
@@ -28,8 +32,15 @@ impl FakeRunner {
     fn with(output: io::Result<Output>) -> Self {
         FakeRunner {
             output,
+            queued: RefCell::new(VecDeque::new()),
             calls: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Answers the next calls with `outputs`, one each, before falling back to the canned output.
+    fn then_in_turn(self, outputs: Vec<Output>) -> Self {
+        self.queued.borrow_mut().extend(outputs);
+        self
     }
 
     fn calls(&self) -> Vec<Vec<String>> {
@@ -42,6 +53,9 @@ impl ProcessRunner for FakeRunner {
         let mut call = vec![program.to_string()];
         call.extend(args.iter().map(|a| a.to_string()));
         self.calls.borrow_mut().push(call);
+        if let Some(out) = self.queued.borrow_mut().pop_front() {
+            return Ok(out);
+        }
         match &self.output {
             Ok(out) => Ok(out.clone()),
             Err(e) => Err(io::Error::new(e.kind(), e.to_string())),
@@ -350,5 +364,75 @@ fn open_pr_creates_the_pr_against_the_base_and_reads_its_url() {
             url: "https://github.com/ibedwi/bli/pull/13".into(),
             state: PrState::Open,
         }
+    );
+}
+
+fn output(success: bool, stdout: &str, stderr: &str) -> Output {
+    Output {
+        success,
+        stdout: stdout.to_string(),
+        stderr: stderr.to_string(),
+    }
+}
+
+#[test]
+fn checks_pass_when_gh_is_installed_and_logged_in() {
+    let runner = FakeRunner::replying("").then_in_turn(vec![
+        output(true, "gh version 2.81.0 (2025-10-01)\n", ""),
+        output(
+            true,
+            "",
+            "github.com\n  ✓ Logged in to github.com account ibedwi\n",
+        ),
+    ]);
+    let checks = GitHub::new(&runner).checks();
+    assert_eq!(
+        runner.calls(),
+        vec![vec!["gh", "--version"], vec!["gh", "auth", "status"]]
+    );
+    let summary: Vec<_> = checks.iter().map(|c| (c.name.as_str(), c.status)).collect();
+    assert_eq!(
+        summary,
+        [("gh", CheckStatus::Pass), ("gh auth", CheckStatus::Pass)]
+    );
+    assert_eq!(checks[0].detail, "gh version 2.81.0 (2025-10-01)");
+}
+
+#[test]
+fn checks_warn_with_an_install_hint_when_gh_is_missing() {
+    let runner = FakeRunner::with(Err(io::Error::new(io::ErrorKind::NotFound, "no gh")));
+    let checks = GitHub::new(&runner).checks();
+    assert_eq!(checks[0].name, "gh");
+    assert_eq!(checks[0].status, CheckStatus::Warn);
+    assert!(
+        checks[0]
+            .hint
+            .as_deref()
+            .unwrap()
+            .contains("cli.github.com"),
+        "{checks:?}"
+    );
+    assert_eq!(checks[1].name, "gh auth");
+    assert_eq!(checks[1].status, CheckStatus::Warn);
+}
+
+#[test]
+fn checks_warn_with_a_login_hint_when_gh_credentials_fail() {
+    let runner = FakeRunner::replying("").then_in_turn(vec![
+        output(true, "gh version 2.81.0 (2025-10-01)\n", ""),
+        output(
+            false,
+            "",
+            "You are not logged into any GitHub hosts. To log in, run: gh auth login\n",
+        ),
+    ]);
+    let checks = GitHub::new(&runner).checks();
+    assert_eq!(checks[0].status, CheckStatus::Pass);
+    assert_eq!(checks[1].name, "gh auth");
+    assert_eq!(checks[1].status, CheckStatus::Warn);
+    assert!(checks[1].detail.contains("not logged into"), "{checks:?}");
+    assert!(
+        checks[1].hint.as_deref().unwrap().contains("gh auth login"),
+        "{checks:?}"
     );
 }

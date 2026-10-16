@@ -1,4 +1,5 @@
 pub mod branch;
+pub mod check;
 pub mod code_host;
 pub mod config;
 pub mod error;
@@ -15,11 +16,13 @@ use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
+use crate::check::Check;
 use crate::code_host::CodeHost;
 use crate::config::Config;
 use crate::error::Error;
 use crate::git::Git;
 use crate::host::LaneHost;
+use crate::process::ProcessRunner;
 use crate::tracker::IssueTracker;
 
 /// Builds the providers a repo's config asks for. The real one runs real tools; tests pass fakes.
@@ -27,6 +30,8 @@ pub trait Providers {
     fn issue_tracker(&self, config: &Config) -> Result<Box<dyn IssueTracker + '_>, Error>;
     fn lane_host(&self, config: &Config) -> Result<Box<dyn LaneHost + '_>, Error>;
     fn code_host(&self, config: &Config) -> Result<Box<dyn CodeHost + '_>, Error>;
+    /// Runs `git` for `bli doctor`'s git check.
+    fn git_runner(&self) -> &dyn ProcessRunner;
 }
 
 /// What a command run produced, for `main` to print and exit with.
@@ -72,6 +77,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check this repo's setup before a fan-out: tools, credentials and the lane host
+    Doctor,
     /// List the tickets under a parent that can be started now
     Frontier {
         /// The parent ticket; defaults to `[tracker] parent` in bli.toml
@@ -152,6 +159,10 @@ pub fn run(args: &[&str], cwd: &Path, providers: &dyn Providers) -> Outcome {
 }
 
 fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands::Report, Error> {
+    // Doctor runs before loading bli.toml or opening the repo, so a problem with either is a warning.
+    if let Command::Doctor = cli.command {
+        return Ok(commands::doctor(&doctor_checks(cwd, providers), cli.json));
+    }
     let config = Config::load(cwd)?;
     let git = Git::open(cwd)?;
     match &cli.command {
@@ -189,6 +200,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
                 cli.json,
             )
         }
+        Command::Doctor => unreachable!("handled above"),
         Command::Lane(LaneCommand::List) => {
             let host = providers.lane_host(&config)?;
             let code = providers.code_host(&config)?;
@@ -225,6 +237,28 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
             .map(Into::into)
         }
     }
+}
+
+/// Checks git, then bli.toml, then the configured providers. Without a usable
+/// bli.toml there are no providers to check, so their checks are left out.
+fn doctor_checks(cwd: &Path, providers: &dyn Providers) -> Vec<Check> {
+    let mut checks = vec![git::check(providers.git_runner())];
+    let config = match Config::load(cwd) {
+        Ok(config) => config,
+        Err(e) => {
+            checks.push(Check::warn(config::FILE_NAME, &e));
+            return checks;
+        }
+    };
+    match providers.issue_tracker(&config) {
+        Ok(tracker) => checks.extend(tracker.checks()),
+        Err(e) => checks.push(Check::warn("issue tracker", &e)),
+    }
+    match providers.lane_host(&config) {
+        Ok(host) => checks.extend(host.checks()),
+        Err(e) => checks.push(Check::warn("lane host", &e)),
+    }
+    checks
 }
 
 fn render_error(e: &Error) -> String {

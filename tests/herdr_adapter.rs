@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use bli::check::{Check, CheckStatus};
 use bli::herdr::Herdr;
 use bli::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
 use bli::process::{Output, ProcessRunner};
@@ -394,4 +395,61 @@ fn read_agent_reports_an_unknown_agent() {
     let err = herdr(&runner).read_agent("5", 60).unwrap_err();
 
     assert!(err.to_string().contains("agent_not_found"), "{err}");
+}
+
+fn check_summary(checks: &[Check]) -> Vec<(&str, CheckStatus)> {
+    checks.iter().map(|c| (c.name.as_str(), c.status)).collect()
+}
+
+#[test]
+fn checks_pass_when_herdr_is_installed_and_its_server_is_running() {
+    let runner = FakeRunner::default()
+        .replying("--version", "herdr 0.9.3\n")
+        .replying("status server", &fixture("status_server_running.json"));
+    let checks = herdr(&runner).checks();
+    assert_eq!(
+        runner.calls(),
+        vec![
+            vec!["herdr", "--version"],
+            vec!["herdr", "status", "server", "--json"]
+        ]
+    );
+    assert_eq!(
+        check_summary(&checks),
+        [
+            ("herdr", CheckStatus::Pass),
+            ("permission mode", CheckStatus::Pass)
+        ]
+    );
+    assert_eq!(checks[0].detail, "herdr 0.9.3");
+    assert!(checks[1].detail.contains("bypassPermissions"), "{checks:?}");
+}
+
+#[test]
+fn checks_warn_with_an_install_hint_when_herdr_is_missing() {
+    let checks = herdr(&FakeRunner::default()).checks();
+    assert_eq!(
+        check_summary(&checks),
+        [
+            ("herdr", CheckStatus::Warn),
+            ("permission mode", CheckStatus::Warn)
+        ]
+    );
+    assert!(
+        checks[0].hint.as_deref().unwrap().contains("herdr.dev"),
+        "{checks:?}"
+    );
+}
+
+#[test]
+fn the_permission_mode_check_warns_when_the_herdr_server_is_not_running() {
+    let runner = FakeRunner::default()
+        .replying("--version", "herdr 0.9.3\n")
+        .replying("status server", &fixture("status_server_not_running.json"));
+    let checks = herdr(&runner).checks();
+    assert_eq!(checks[0].status, CheckStatus::Pass);
+    assert_eq!(checks[1].name, "permission mode");
+    assert_eq!(checks[1].status, CheckStatus::Warn);
+    assert!(checks[1].detail.contains("not running"), "{checks:?}");
+    assert!(checks[1].hint.is_some(), "{checks:?}");
 }

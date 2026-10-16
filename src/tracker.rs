@@ -2,6 +2,7 @@
 
 use serde::Serialize;
 
+use crate::check::Check;
 use crate::error::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,6 +35,9 @@ pub trait IssueTracker {
     /// The body for a pull request shipping ticket `id`, given the `body` written for it:
     /// on a tracker that reads pull requests, one that closes the ticket on merge.
     fn pr_body(&self, id: &str, body: &str) -> Result<String, Error>;
+
+    /// Checks the tracker's tools and credentials, for `bli doctor`.
+    fn checks(&self) -> Vec<Check>;
 }
 
 impl<T: IssueTracker + ?Sized> IssueTracker for &T {
@@ -51,5 +55,9 @@ impl<T: IssueTracker + ?Sized> IssueTracker for &T {
 
     fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
         (**self).pr_body(id, body)
+    }
+
+    fn checks(&self) -> Vec<Check> {
+        (**self).checks()
     }
 }

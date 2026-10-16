@@ -6,6 +6,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::branch;
+use crate::check::Check;
 use crate::code_host::{CodeHost, NewPullRequest, PullRequest};
 use crate::config::Config;
 use crate::error::Error;
@@ -516,4 +517,42 @@ fn lanes(host: &dyn LaneHost, git: &Git, config: &Config) -> Result<Vec<Lane>, E
         });
     }
     Ok(lanes)
+}
+
+pub fn doctor(checks: &[Check], json: bool) -> Report {
+    let failed = checks.iter().filter(|c| !c.passed()).count();
+    let failure =
+        (failed > 0).then(|| Error::new(format!("{failed} of {} checks failed", checks.len())));
+    if json {
+        let stdout = format!("{}\n", json!({ "checks": checks }));
+        return Report { stdout, failure };
+    }
+    let mut out = String::new();
+    for c in checks {
+        out.push_str(&format!(
+            "{}  {}  {}\n",
+            c.status.as_str(),
+            c.name,
+            c.detail
+        ));
+        if let Some(hint) = &c.hint {
+            // Indent every line of a multi-line hint under the first, leaving blank lines blank.
+            let mut lines = hint.lines();
+            out.push_str(&format!(
+                "      hint: {}\n",
+                lines.next().unwrap_or_default()
+            ));
+            for line in lines {
+                if !line.is_empty() {
+                    out.push_str("      ");
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    Report {
+        stdout: out,
+        failure,
+    }
 }

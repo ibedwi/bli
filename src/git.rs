@@ -3,6 +3,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::check::Check;
 use crate::error::Error;
 use crate::process::{Output, ProcessRunner, SystemRunner};
 
@@ -112,4 +113,22 @@ fn not_run(e: io::Error) -> Error {
         io::ErrorKind::NotFound => Error::new("could not run `git`: it is not installed"),
         _ => Error::new(format!("could not run `git`: {e}")),
     }
+}
+
+/// Checks that git is installed, for `bli doctor`.
+pub fn check(runner: &dyn ProcessRunner) -> Check {
+    let version = runner
+        .run("git", &["--version"])
+        .map_err(|e| not_run(e).with_hint("install git (https://git-scm.com)"))
+        .and_then(|out| {
+            if out.success {
+                Ok(out.stdout.trim().to_string())
+            } else {
+                Err(Error::new(format!(
+                    "`git --version` failed: {}",
+                    out.stderr.trim()
+                )))
+            }
+        });
+    Check::from_result("git", version)
 }
