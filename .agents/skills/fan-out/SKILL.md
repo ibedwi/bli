@@ -33,7 +33,7 @@ bli lane start <id>... --json        # add --base <branch> when base= was given
 - `skipped`: the ticket already has a lane or a claim; `reason` says which.
 - `failed`: `error` says why. When `path` is present, the lane exists and the ticket is claimed, but its agent did not start.
 
-For each `blocked` lane, read its agent (`herdr agent read t<id> --source recent-unwrapped --lines 60`) and show the developer what it is asking. Answering it is the developer's decision.
+For each `blocked` lane, read its agent (`bli lane read <id>`) and show the developer what it is asking. Answering it is the developer's decision.
 
 This step is done when every confirmed ticket has an outcome, and each `blocked` agent's question has been shown to the developer.
 
@@ -41,8 +41,8 @@ This step is done when every confirmed ticket has an outcome, and each `blocked`
 
 A table: ticket title (linked), outcome, branch, status hint, and the reason or error for any lane not started. Then how to watch the lanes:
 
-- `bli lane list`: every lane with its ticket, branch, base and status hint;
-- `herdr agent read t<id> --source recent-unwrapped --lines 80`: one lane's latest output.
+- `bli lane list`: every lane with its ticket, branch, base, PR and status hint;
+- `bli lane read <id>`: one lane's latest output.
 
 When the agents are done, run `/fan-in`.
 

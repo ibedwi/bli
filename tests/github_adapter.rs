@@ -3,7 +3,9 @@
 
 use std::cell::RefCell;
 use std::io;
+use std::path::Path;
 
+use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::github::GitHub;
 use bli::process::{Output, ProcessRunner};
 use bli::tracker::{IssueTracker, Ticket, TicketDetails};
@@ -203,4 +205,150 @@ fn claim_reports_gh_failure_with_its_stderr() {
     }));
     let err = GitHub::new(&runner).claim("4").unwrap_err();
     assert!(err.to_string().contains("Could not resolve"), "{err}");
+}
+
+#[test]
+fn pr_body_adds_a_closing_reference_so_merging_closes_the_ticket() {
+    let runner = FakeRunner::replying("");
+    let body = GitHub::new(&runner)
+        .pr_body("#5", "## Summary\n\nShips lanes.\n")
+        .unwrap();
+    assert_eq!(body, "## Summary\n\nShips lanes.\n\nCloses #5\n");
+}
+
+#[test]
+fn pr_body_keeps_a_body_that_already_closes_the_ticket() {
+    let runner = FakeRunner::replying("");
+    for body in ["Closes #5", "fixes #5.", "Some text\nResolved #5\n"] {
+        assert_eq!(GitHub::new(&runner).pr_body("5", body).unwrap(), body);
+    }
+}
+
+#[test]
+fn pr_body_does_not_mistake_another_tickets_reference_for_this_ones() {
+    let runner = FakeRunner::replying("");
+    let body = GitHub::new(&runner)
+        .pr_body("5", "Closes #50\nSee #5")
+        .unwrap();
+    assert_eq!(body, "Closes #50\nSee #5\n\nCloses #5\n");
+}
+
+const REPO: &str = "/home/ibedwi/github/bli";
+
+#[test]
+fn push_pushes_the_branch_to_origin_and_tracks_it() {
+    let runner = FakeRunner::replying("");
+    GitHub::new(&runner)
+        .push(Path::new(REPO), "ticket/5-fan-in")
+        .unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![vec![
+            "git",
+            "-C",
+            REPO,
+            "push",
+            "--quiet",
+            "-u",
+            "origin",
+            "ticket/5-fan-in"
+        ]]
+    );
+}
+
+#[test]
+fn push_reports_git_failure_with_its_stderr() {
+    let runner = FakeRunner::with(Ok(Output {
+        success: false,
+        stdout: String::new(),
+        stderr: "! [rejected] ticket/5-fan-in (non-fast-forward)".into(),
+    }));
+    let err = GitHub::new(&runner)
+        .push(Path::new(REPO), "ticket/5-fan-in")
+        .unwrap_err();
+    assert!(err.to_string().contains("non-fast-forward"), "{err}");
+}
+
+#[test]
+fn find_pr_lists_the_head_branchs_prs_in_any_state() {
+    let runner = FakeRunner::replying(&fixture("pr_list_merged.json"));
+    let pr = GitHub::new(&runner)
+        .find_pr("ticket/3-fan-out-on-herdr")
+        .unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![vec![
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            "ticket/3-fan-out-on-herdr",
+            "--state",
+            "all",
+            "--json",
+            "number,url,state",
+        ]]
+    );
+    assert_eq!(
+        pr,
+        Some(PullRequest {
+            number: 12,
+            url: "https://github.com/ibedwi/bli/pull/12".into(),
+            state: PrState::Merged,
+        })
+    );
+}
+
+#[test]
+fn find_pr_finds_nothing_for_a_branch_without_a_pr() {
+    let runner = FakeRunner::replying("[]\n");
+    assert_eq!(GitHub::new(&runner).find_pr("ticket/5-x").unwrap(), None);
+}
+
+#[test]
+fn find_pr_prefers_an_open_pr_over_a_closed_one() {
+    let runner = FakeRunner::replying(
+        r#"[{"number":14,"state":"CLOSED","url":"https://github.com/o/r/pull/14"},
+            {"number":13,"state":"OPEN","url":"https://github.com/o/r/pull/13"}]"#,
+    );
+    let pr = GitHub::new(&runner).find_pr("ticket/5-x").unwrap().unwrap();
+    assert_eq!(pr.number, 13);
+    assert_eq!(pr.state, PrState::Open);
+}
+
+#[test]
+fn open_pr_creates_the_pr_against_the_base_and_reads_its_url() {
+    let runner = FakeRunner::replying("https://github.com/ibedwi/bli/pull/13\n");
+    let pr = GitHub::new(&runner)
+        .open_pr(&NewPullRequest {
+            head: "ticket/5-fan-in".into(),
+            base: "release".into(),
+            title: "Fan-in ships finished lanes".into(),
+            body: "Closes #5\n".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![vec![
+            "gh",
+            "pr",
+            "create",
+            "--head",
+            "ticket/5-fan-in",
+            "--base",
+            "release",
+            "--title",
+            "Fan-in ships finished lanes",
+            "--body",
+            "Closes #5\n",
+        ]]
+    );
+    assert_eq!(
+        pr,
+        PullRequest {
+            number: 13,
+            url: "https://github.com/ibedwi/bli/pull/13".into(),
+            state: PrState::Open,
+        }
+    );
 }

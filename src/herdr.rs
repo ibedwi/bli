@@ -30,18 +30,22 @@ impl<R: ProcessRunner> Herdr<R> {
 
     /// Runs `herdr` with `args` and returns the `result` of its JSON reply.
     fn herdr<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Error> {
-        self.try_herdr(args)?.map_err(|e| {
-            Error::new(format!(
-                "`{}` failed: {} ({})",
-                command(args),
-                e.message,
-                e.code
-            ))
-        })
+        self.try_herdr(args)?.map_err(|e| failed(args, e))
     }
 
     /// Like [`Herdr::herdr`], but hands back an error herdr itself reported, for the caller to inspect.
     fn try_herdr<T: DeserializeOwned>(&self, args: &[&str]) -> Result<Result<T, ErrorBody>, Error> {
+        let stdout = match self.try_herdr_text(args)? {
+            Ok(stdout) => stdout,
+            Err(e) => return Ok(Err(e)),
+        };
+        serde_json::from_str::<Reply<T>>(&stdout)
+            .map(|reply| Ok(reply.result))
+            .map_err(|e| Error::new(format!("could not read `{}` output: {e}", command(args))))
+    }
+
+    /// Like [`Herdr::try_herdr`], for the commands that reply with plain text rather than JSON.
+    fn try_herdr_text(&self, args: &[&str]) -> Result<Result<String, ErrorBody>, Error> {
         let command = command(args);
         let out = self.runner.run("herdr", args).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Error::new("could not run `herdr`: it is not installed")
@@ -59,15 +63,23 @@ impl<R: ProcessRunner> Herdr<R> {
                 ))),
             };
         }
-        serde_json::from_str::<Reply<T>>(&out.stdout)
-            .map(|reply| Ok(reply.result))
-            .map_err(|e| Error::new(format!("could not read `{command}` output: {e}")))
+        Ok(Ok(out.stdout))
     }
 
     /// Like [`Herdr::herdr`], for commands whose reply `bli` doesn't need.
     fn herdr_unit(&self, args: &[&str]) -> Result<(), Error> {
         self.herdr::<IgnoredAny>(args).map(drop)
     }
+}
+
+/// An error herdr reported, as a `bli` error.
+fn failed(args: &[&str], e: ErrorBody) -> Error {
+    Error::new(format!(
+        "`{}` failed: {} ({})",
+        command(args),
+        e.message,
+        e.code
+    ))
 }
 
 impl<R: ProcessRunner> LaneHost for Herdr<R> {
@@ -138,11 +150,23 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
             Ok(reply) => Ok(reply.agent.status()),
             // An agent slow to pick up its prompt is started all the same; its status just isn't known yet.
             Err(e) if e.code == "timeout" => Ok(StatusHint::Unknown),
-            Err(e) => Err(Error::new(format!(
-                "`herdr agent wait` failed: {} ({})",
-                e.message, e.code
-            ))),
+            Err(e) => Err(failed(&["agent", "wait"], e)),
         }
+    }
+
+    fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error> {
+        let name = format!("t{ticket_id}");
+        let lines = lines.to_string();
+        let args = [
+            "agent",
+            "read",
+            &name,
+            "--source",
+            "recent-unwrapped",
+            "--lines",
+            &lines,
+        ];
+        self.try_herdr_text(&args)?.map_err(|e| failed(&args, e))
     }
 
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {

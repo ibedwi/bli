@@ -55,6 +55,16 @@ impl Git {
         Ok(out.success)
     }
 
+    /// How many commits local branch `branch` has that `base` on the remote doesn't, as of the last fetch.
+    pub fn commits_ahead(&self, branch: &str, base: &str) -> Result<u64, Error> {
+        let range = format!("{REMOTE}/{base}..refs/heads/{branch}");
+        let count = self.git(&["rev-list", "--count", &range])?;
+        count
+            .trim()
+            .parse()
+            .map_err(|_| Error::new(format!("could not read the commit count of {range}")))
+    }
+
     /// Records `base` as the base of lane branch `branch`.
     pub fn set_base(&self, branch: &str, base: &str) -> Result<(), Error> {
         self.git(&["config", &base_key(branch), base]).map(drop)

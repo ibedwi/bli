@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
+use bli::code_host::CodeHost;
 use bli::config::{Config, HostKind, TrackerKind};
 use bli::error::Error;
 use bli::github::GitHub;
@@ -33,6 +34,11 @@ impl Providers for System {
             HostKind::Superset => Err(Error::new("the Superset lane host is not supported yet")
                 .with_hint("set `host = \"herdr\"` under [lane] in bli.toml")),
         }
+    }
+
+    /// GitHub is the only code host.
+    fn code_host(&self, _config: &Config) -> Result<Box<dyn CodeHost + '_>, Error> {
+        Ok(Box::new(GitHub::new(SystemRunner)))
     }
 }
 

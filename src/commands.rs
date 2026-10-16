@@ -1,11 +1,12 @@
 //! The workflow. Depends only on the provider interfaces and git, never on an adapter.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::json;
 
 use crate::branch;
+use crate::code_host::{CodeHost, NewPullRequest, PullRequest};
 use crate::config::Config;
 use crate::error::Error;
 use crate::git::{Git, REMOTE};
@@ -305,21 +306,30 @@ impl StartReport {
 
 pub fn lane_list(
     host: &dyn LaneHost,
+    code: &dyn CodeHost,
     git: &Git,
     config: &Config,
     json: bool,
 ) -> Result<String, Error> {
-    let lanes = lanes(host, git, config)?;
-    if json {
-        return Ok(format!("{}\n", json!({ "lanes": lanes })));
+    let mut listed = Vec::new();
+    for lane in lanes(host, git, config)? {
+        let pr = code.find_pr(&lane.branch)?;
+        listed.push(ListedLane { lane, pr });
     }
-    if lanes.is_empty() {
+    if json {
+        return Ok(format!("{}\n", json!({ "lanes": listed })));
+    }
+    if listed.is_empty() {
         return Ok("No lanes.\n".into());
     }
     let mut out = String::new();
-    for l in &lanes {
+    for ListedLane { lane: l, pr } in &listed {
+        let pr = match pr {
+            Some(pr) => format!("PR #{} {}", pr.number, pr.state.as_str()),
+            None => "no PR".into(),
+        };
         out.push_str(&format!(
-            "{}  {}  (base {}, {})\n    {}\n",
+            "{}  {}  (base {}, {}, {pr})\n    {}\n",
             l.ticket,
             l.branch,
             l.base,
@@ -328,6 +338,134 @@ pub fn lane_list(
         ));
     }
     Ok(out)
+}
+
+/// A lane with its pull request, if it has one.
+#[derive(Debug, Serialize)]
+struct ListedLane {
+    #[serde(flatten)]
+    lane: Lane,
+    pr: Option<PullRequest>,
+}
+
+pub fn lane_read(
+    host: &dyn LaneHost,
+    git: &Git,
+    config: &Config,
+    ticket: &str,
+    lines: u32,
+    json: bool,
+) -> Result<String, Error> {
+    let lane = lane(host, git, config, ticket)?;
+    let output = host.read_agent(&lane.ticket, lines)?;
+    if json {
+        return Ok(format!(
+            "{}\n",
+            json!({
+                "ticket": lane.ticket,
+                "branch": lane.branch,
+                "status": lane.status,
+                "output": output,
+            })
+        ));
+    }
+    Ok(output)
+}
+
+pub struct ShipRequest<'a> {
+    pub ticket: &'a str,
+    pub body_file: &'a Path,
+    pub title: Option<&'a str>,
+}
+
+pub fn lane_ship(
+    tracker: &dyn IssueTracker,
+    host: &dyn LaneHost,
+    code: &dyn CodeHost,
+    git: &Git,
+    config: &Config,
+    request: &ShipRequest,
+    json: bool,
+) -> Result<String, Error> {
+    let body = std::fs::read_to_string(request.body_file).map_err(|e| {
+        Error::new(format!(
+            "could not read the PR body from {}: {e}",
+            request.body_file.display()
+        ))
+    })?;
+    let ticket = tracker.ticket(request.ticket)?.ticket;
+    let lane = lane(host, git, config, &ticket.id)?;
+    // Checked before the commits, so a rerun after the PR merged still reports it.
+    let (outcome, pr) = match code.find_pr(&lane.branch)? {
+        Some(pr) => (ShipOutcome::Existing, pr),
+        None => {
+            git.fetch()?;
+            if !git.has_remote_branch(&lane.base)? {
+                return Err(Error::new(format!(
+                    "the lane's base `{}` is not on {REMOTE}",
+                    lane.base
+                ))
+                .with_hint(format!(
+                    "push it with `git push {REMOTE} {}`, or record another with `git config branch.{}.bliBase <branch>`",
+                    lane.base, lane.branch
+                )));
+            }
+            if git.commits_ahead(&lane.branch, &lane.base)? == 0 {
+                return Err(Error::new(format!(
+                    "{} has no commits beyond {REMOTE}/{}",
+                    lane.branch, lane.base
+                ))
+                .with_hint(format!(
+                    "read the lane's output with `bli lane read {}`: its agent may not have committed its work",
+                    lane.ticket
+                )));
+            }
+            code.push(git.main_checkout(), &lane.branch)?;
+            let pr = code.open_pr(&NewPullRequest {
+                head: lane.branch.clone(),
+                base: lane.base.clone(),
+                title: request.title.unwrap_or(&ticket.title).to_string(),
+                body: tracker.pr_body(&ticket.id, &body)?,
+            })?;
+            (ShipOutcome::Opened, pr)
+        }
+    };
+    if json {
+        return Ok(format!(
+            "{}\n",
+            json!({
+                "ticket": lane.ticket,
+                "branch": lane.branch,
+                "base": lane.base,
+                "outcome": outcome,
+                "pr": pr,
+            })
+        ));
+    }
+    Ok(format!(
+        "{}  {}  {}  ({} into {})\n",
+        lane.ticket,
+        outcome.as_str(),
+        pr.url,
+        lane.branch,
+        lane.base
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ShipOutcome {
+    Opened,
+    Existing,
+}
+
+impl ShipOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            ShipOutcome::Opened => "opened",
+            ShipOutcome::Existing => "existing",
+        }
+    }
 }
 
 /// A lane as `bli` sees it: a host checkout whose branch matches the pattern (ADR 0001).
@@ -339,6 +477,17 @@ struct Lane {
     path: PathBuf,
     workspace: Option<String>,
     status: StatusHint,
+}
+
+/// The lane for `ticket`, or an error when it has none.
+fn lane(host: &dyn LaneHost, git: &Git, config: &Config, ticket: &str) -> Result<Lane, Error> {
+    lanes(host, git, config)?
+        .into_iter()
+        .find(|l| l.ticket == ticket)
+        .ok_or_else(|| {
+            Error::new(format!("no lane for ticket {ticket}"))
+                .with_hint("run `bli lane list` to see every lane and its ticket")
+        })
 }
 
 /// Rediscovers every lane from the host's live list.

@@ -1,10 +1,13 @@
-//! GitHub Issues as the issue tracker, through the `gh` CLI.
+//! GitHub as the issue tracker and the code host, through the `gh` CLI.
 
 use std::io;
+use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use crate::error::Error;
+use crate::git::REMOTE;
 use crate::process::ProcessRunner;
 use crate::tracker::{IssueTracker, Ticket, TicketDetails};
 
@@ -19,21 +22,41 @@ impl<R: ProcessRunner> GitHub<R> {
 
     /// Runs `gh` with `args` and returns its stdout, or an error carrying its stderr.
     fn gh(&self, args: &[&str]) -> Result<String, Error> {
-        let out = self.runner.run("gh", args).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => Error::new("could not run `gh`: it is not installed")
-                .with_hint(
-                    "install the GitHub CLI (https://cli.github.com) and run `gh auth login`",
-                ),
-            _ => Error::new(format!("could not run `gh`: {e}")),
-        })?;
+        self.run("gh", args).map_err(|e| match e {
+            Failure::NotRun(e) if e.kind() == io::ErrorKind::NotFound => Error::new(
+                "could not run `gh`: it is not installed",
+            )
+            .with_hint("install the GitHub CLI (https://cli.github.com) and run `gh auth login`"),
+            e => e.into_error("gh", args),
+        })
+    }
+
+    /// Runs `program` with `args` and returns its stdout.
+    fn run(&self, program: &str, args: &[&str]) -> Result<String, Failure> {
+        let out = self.runner.run(program, args).map_err(Failure::NotRun)?;
         if !out.success {
-            return Err(Error::new(format!(
-                "`gh {}` failed: {}",
-                args.join(" "),
-                out.stderr.trim()
-            )));
+            return Err(Failure::Failed(out.stderr));
         }
         Ok(out.stdout)
+    }
+}
+
+/// Why running a tool failed.
+enum Failure {
+    NotRun(io::Error),
+    Failed(String),
+}
+
+impl Failure {
+    fn into_error(self, program: &str, args: &[&str]) -> Error {
+        match self {
+            Failure::NotRun(e) => Error::new(format!("could not run `{program}`: {e}")),
+            Failure::Failed(stderr) => Error::new(format!(
+                "`{program} {}` failed: {}",
+                args.join(" "),
+                stderr.trim()
+            )),
+        }
     }
 }
 
@@ -83,6 +106,84 @@ impl<R: ProcessRunner> IssueTracker for GitHub<R> {
         self.gh(&["issue", "edit", &number, "--add-assignee", "@me"])
             .map(drop)
     }
+
+    /// GitHub closes an issue when a merged PR's body says `Closes #<n>`.
+    fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
+        let number = issue_number(id)?;
+        if closes(body, number) {
+            return Ok(body.to_string());
+        }
+        let body = body.trim_end();
+        Ok(format!("{body}\n\nCloses #{number}\n"))
+    }
+}
+
+impl<R: ProcessRunner> CodeHost for GitHub<R> {
+    fn push(&self, repo: &Path, branch: &str) -> Result<(), Error> {
+        let repo = repo.to_string_lossy();
+        let args = ["-C", &repo, "push", "--quiet", "-u", REMOTE, branch];
+        self.run("git", &args)
+            .map(drop)
+            .map_err(|e| e.into_error("git", &args))
+    }
+
+    fn find_pr(&self, head: &str) -> Result<Option<PullRequest>, Error> {
+        let stdout = self.gh(&[
+            "pr",
+            "list",
+            "--head",
+            head,
+            "--state",
+            "all",
+            "--json",
+            "number,url,state",
+        ])?;
+        let prs: Vec<Pr> = serde_json::from_str(&stdout)
+            .map_err(|e| Error::new(format!("could not read `gh pr list` output: {e}")))?;
+        let mut prs: Vec<_> = prs.into_iter().map(Pr::into_pull_request).collect();
+        // `gh` lists the newest first; an open PR is the one still in play.
+        let open = prs.iter().position(|p| p.state == PrState::Open);
+        Ok(match open {
+            Some(i) => Some(prs.swap_remove(i)),
+            None => prs.into_iter().next(),
+        })
+    }
+
+    fn open_pr(&self, pr: &NewPullRequest) -> Result<PullRequest, Error> {
+        let stdout = self.gh(&[
+            "pr", "create", "--head", &pr.head, "--base", &pr.base, "--title", &pr.title, "--body",
+            &pr.body,
+        ])?;
+        // `gh pr create` prints the new PR's URL, ending in its number.
+        let url = stdout.trim().lines().last().unwrap_or_default().to_string();
+        let number = url
+            .rsplit('/')
+            .next()
+            .and_then(|n| n.parse().ok())
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "could not read the new PR's URL from `gh pr create`: {url}"
+                ))
+            })?;
+        Ok(PullRequest {
+            number,
+            url,
+            state: PrState::Open,
+        })
+    }
+}
+
+/// Whether `body` holds a GitHub closing keyword for issue `number`, e.g. `Fixes #12`.
+fn closes(body: &str, number: u64) -> bool {
+    const KEYWORDS: [&str; 9] = [
+        "close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved",
+    ];
+    let words: Vec<_> = body.split_whitespace().collect();
+    words.windows(2).any(|pair| {
+        let keyword = pair[0].trim_end_matches(':').to_ascii_lowercase();
+        let reference = pair[1].trim_end_matches(|c: char| c.is_ascii_punctuation());
+        KEYWORDS.contains(&keyword.as_str()) && reference == format!("#{number}")
+    })
 }
 
 /// A GitHub ticket ID is an issue number, optionally written `#12`.
@@ -133,4 +234,27 @@ struct IssueView {
 #[derive(Deserialize)]
 struct Assignee {
     login: String,
+}
+
+/// `gh pr list --json` output.
+#[derive(Deserialize)]
+struct Pr {
+    number: u64,
+    url: String,
+    state: String,
+}
+
+impl Pr {
+    fn into_pull_request(self) -> PullRequest {
+        let state = match self.state.as_str() {
+            "MERGED" => PrState::Merged,
+            "CLOSED" => PrState::Closed,
+            _ => PrState::Open,
+        };
+        PullRequest {
+            number: self.number,
+            url: self.url,
+            state,
+        }
+    }
 }

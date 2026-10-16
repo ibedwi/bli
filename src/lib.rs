@@ -1,4 +1,5 @@
 pub mod branch;
+pub mod code_host;
 pub mod config;
 pub mod error;
 pub mod git;
@@ -10,10 +11,11 @@ pub mod tracker;
 
 mod commands;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 
+use crate::code_host::CodeHost;
 use crate::config::Config;
 use crate::error::Error;
 use crate::git::Git;
@@ -24,6 +26,7 @@ use crate::tracker::IssueTracker;
 pub trait Providers {
     fn issue_tracker(&self, config: &Config) -> Result<Box<dyn IssueTracker + '_>, Error>;
     fn lane_host(&self, config: &Config) -> Result<Box<dyn LaneHost + '_>, Error>;
+    fn code_host(&self, config: &Config) -> Result<Box<dyn CodeHost + '_>, Error>;
 }
 
 /// What a command run produced, for `main` to print and exit with.
@@ -94,8 +97,27 @@ enum LaneCommand {
         #[arg(long)]
         slug: Option<String>,
     },
-    /// List every lane with its ticket, branch, base and the host's status hint
+    /// List every lane with its ticket, branch, base, PR and the host's status hint
     List,
+    /// Print a lane's agent's recent output
+    Read {
+        /// The lane's ticket
+        ticket: String,
+        /// How many lines of output to read
+        #[arg(long, default_value_t = 80)]
+        lines: u32,
+    },
+    /// Push a finished lane's branch and open its pull request against the lane's base
+    Ship {
+        /// The lane's ticket
+        ticket: String,
+        /// A file holding the pull request's body
+        #[arg(long)]
+        body_file: PathBuf,
+        /// The pull request's title; defaults to the ticket's title
+        #[arg(long)]
+        title: Option<String>,
+    },
 }
 
 /// Runs `bli` with `args` (without the program name) from `cwd`.
@@ -169,7 +191,38 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
         }
         Command::Lane(LaneCommand::List) => {
             let host = providers.lane_host(&config)?;
-            commands::lane_list(host.as_ref(), &git, &config, cli.json).map(Into::into)
+            let code = providers.code_host(&config)?;
+            commands::lane_list(host.as_ref(), code.as_ref(), &git, &config, cli.json)
+                .map(Into::into)
+        }
+        Command::Lane(LaneCommand::Read { ticket, lines }) => {
+            let host = providers.lane_host(&config)?;
+            commands::lane_read(host.as_ref(), &git, &config, ticket, *lines, cli.json)
+                .map(Into::into)
+        }
+        Command::Lane(LaneCommand::Ship {
+            ticket,
+            body_file,
+            title,
+        }) => {
+            let tracker = providers.issue_tracker(&config)?;
+            let host = providers.lane_host(&config)?;
+            let code = providers.code_host(&config)?;
+            let request = commands::ShipRequest {
+                ticket,
+                body_file,
+                title: title.as_deref(),
+            };
+            commands::lane_ship(
+                tracker.as_ref(),
+                host.as_ref(),
+                code.as_ref(),
+                &git,
+                &config,
+                &request,
+                cli.json,
+            )
+            .map(Into::into)
         }
     }
 }
