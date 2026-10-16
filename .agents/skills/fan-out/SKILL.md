@@ -14,6 +14,8 @@ Arguments: issue numbers (`/fan-out 20 24 40`), a parent issue (`/fan-out parent
 
 `test "${HERDR_ENV:-}" = 1`. If it fails, tell the user to run this from a herdr pane, and stop.
 
+Then take the repo root, `root=$(git rev-parse --show-toplevel)`, and pass `--cwd "$root"` to every `herdr worktree list` and `herdr worktree create`. Without it herdr can resolve a different repo than the one you're in, and list or create lanes there.
+
 ## 2. Pick the tickets
 
 - **Numbers given**: use them.
@@ -24,7 +26,7 @@ Arguments: issue numbers (`/fan-out 20 24 40`), a parent issue (`/fan-out parent
     --jq '.[] | select(.state=="open" and .issue_dependencies_summary.blocked_by==0 and (.assignees|length)==0) | "\(.number)\t\(.title)"'
   ```
 
-Drop any ticket that already has a lane: a branch `ticket/<n>-*` in `herdr worktree list`, or an assignee.
+Drop any ticket that already has a lane: a branch `ticket/<n>-*` in `herdr worktree list --cwd "$root"`, or an assignee.
 
 Show the user the tickets with their titles and ask whether to start all of them. Always launch agents in `bypassPermissions` mode.
 
@@ -36,7 +38,7 @@ Every lane branches from the **remote** copy of the base, `origin/<base>` (`orig
 
 ```bash
 slug=<3-5 word kebab-case slug of the title>
-out=$(herdr worktree create --branch "ticket/$n-$slug" --base "origin/$base" \
+out=$(herdr worktree create --cwd "$root" --branch "ticket/$n-$slug" --base "origin/$base" \
         --label "#$n $slug" --no-focus --trust-repository)
 git config "branch.ticket/$n-$slug.fanOutBase" "$base"
 pane=$(jq -r '.result.root_pane.pane_id' <<<"$out")

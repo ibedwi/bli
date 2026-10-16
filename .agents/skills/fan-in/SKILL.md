@@ -12,10 +12,12 @@ Walk every **lane** that `/fan-out` started (a herdr worktree on a `ticket/<n>-*
 
 `test "${HERDR_ENV:-}" = 1`. If it fails, tell the user to run this from a herdr pane, and stop.
 
+Then take the repo root, `root=$(git rev-parse --show-toplevel)`, and pass `--cwd "$root"` to `herdr worktree list`. Without it herdr can resolve a different repo than the one you're in, and list that repo's lanes instead.
+
 ## 2. List the lanes
 
 ```bash
-herdr worktree list   # lanes: worktrees whose branch starts with ticket/
+herdr worktree list --cwd "$root"   # lanes: worktrees whose branch starts with ticket/
 herdr agent list      # each t<n> agent's state
 ```
 
