@@ -13,4 +13,8 @@ Real output of herdr 0.9.3, saved 2026-10-16 using a throwaway `scratch/bli-fixt
 - `status_server_running.json`: `herdr status server --json` with the server running. Unlike the socket API commands, its reply is not wrapped in `result`.
 - `status_server_not_running.json`: `herdr --session bli-fixture status server --json`, for a session with no server. It exits 0 all the same.
 
+- `worktree_open.json`: `herdr worktree open --cwd <main checkout> --path <lane path> --no-focus --trust-repository` on a `scratch/bli-rm-fixture` lane whose workspace had been closed with `herdr workspace close`, so it had no `open_workspace_id`. `herdr worktree remove` only takes a workspace, so a closed one is reopened first.
+- `error_dirty_worktree.json`: the stderr of `herdr worktree remove --workspace w9` while that lane had an untracked file.
+- `worktree_remove.json`: `herdr worktree remove --workspace w9 --force` on the same lane. It removes the checkout and closes the workspace but keeps the branch.
+
 `herdr worktree create --cwd <linked worktree>` fails with `linked_worktree_source`, which is why `bli` always passes the main checkout.

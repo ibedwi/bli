@@ -172,6 +172,7 @@ pub struct FakeHost {
     created: RefCell<Vec<(PathBuf, NewLane)>>,
     started: RefCell<Vec<(String, String)>>,
     listed_from: RefCell<Vec<PathBuf>>,
+    removed: RefCell<Vec<Removal>>,
     start_status: StatusHint,
     failing_branches: Vec<String>,
     agents_fail: bool,
@@ -187,6 +188,7 @@ impl Default for FakeHost {
             created: RefCell::new(Vec::new()),
             started: RefCell::new(Vec::new()),
             listed_from: RefCell::new(Vec::new()),
+            removed: RefCell::new(Vec::new()),
             start_status: StatusHint::Working,
             failing_branches: Vec::new(),
             agents_fail: false,
@@ -213,6 +215,43 @@ impl FakeHost {
             is_main: false,
             workspace: Some(format!("w{}", n + 10)),
             status,
+        });
+        self
+    }
+
+    /// Adds a linked checkout on `branch` at a real `path`, such as one from [`Repo::add_worktree`].
+    pub fn with_checkout_at(self, path: &Path, branch: &str, status: StatusHint) -> Self {
+        let n = self.checkouts.borrow().len();
+        self.checkouts.borrow_mut().push(HostCheckout {
+            path: path.to_path_buf(),
+            branch: Some(branch.to_string()),
+            is_main: false,
+            workspace: Some(format!("w{}", n + 10)),
+            status,
+        });
+        self
+    }
+
+    /// Adds a linked checkout on `branch` with no open workspace.
+    pub fn with_closed_checkout(self, branch: &str) -> Self {
+        self.checkouts.borrow_mut().push(HostCheckout {
+            path: PathBuf::from(format!("/lanes/{}", branch.replace('/', "-"))),
+            branch: Some(branch.to_string()),
+            is_main: false,
+            workspace: None,
+            status: StatusHint::Unknown,
+        });
+        self
+    }
+
+    /// Adds the main checkout at a real `path`.
+    pub fn with_main_checkout_at(self, path: &Path, branch: &str) -> Self {
+        self.checkouts.borrow_mut().push(HostCheckout {
+            path: path.to_path_buf(),
+            branch: Some(branch.to_string()),
+            is_main: true,
+            workspace: Some("w1".into()),
+            status: StatusHint::Unknown,
         });
         self
     }
@@ -270,6 +309,20 @@ impl FakeHost {
     pub fn listed_from(&self) -> Vec<PathBuf> {
         self.listed_from.borrow().clone()
     }
+
+    /// Every lane removed, in order.
+    pub fn removed(&self) -> Vec<Removal> {
+        self.removed.borrow().clone()
+    }
+}
+
+/// One `remove_lane` call the fake host received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removal {
+    pub repo: PathBuf,
+    pub path: PathBuf,
+    pub workspace: Option<String>,
+    pub force: bool,
 }
 
 impl LaneHost for FakeHost {
@@ -333,6 +386,42 @@ impl LaneHost for FakeHost {
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {
         self.listed_from.borrow_mut().push(repo.to_path_buf());
         Ok(self.checkouts.borrow().clone())
+    }
+
+    fn remove_lane(
+        &self,
+        repo: &Path,
+        path: &Path,
+        workspace: Option<&str>,
+        force: bool,
+    ) -> Result<(), Error> {
+        self.removed.borrow_mut().push(Removal {
+            repo: repo.to_path_buf(),
+            path: path.to_path_buf(),
+            workspace: workspace.map(str::to_string),
+            force,
+        });
+        self.checkouts.borrow_mut().retain(|c| c.path != path);
+        // A real checkout goes the way a real host removes it, refusing changes without force.
+        if path.exists() {
+            let path = path.to_str().unwrap();
+            let mut args = vec!["worktree", "remove", path];
+            if force {
+                args.push("--force");
+            }
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(repo)
+                .args(&args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            if !out.status.success() {
+                return Err(Error::new(String::from_utf8_lossy(&out.stderr).trim()));
+            }
+        }
+        Ok(())
     }
 
     fn checks(&self) -> Vec<Check> {

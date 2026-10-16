@@ -125,6 +125,22 @@ enum LaneCommand {
         #[arg(long)]
         title: Option<String>,
     },
+    /// Report what removing a lane would lose: changed files, unpushed commits, its PR
+    Inspect {
+        /// The lane, by ticket ID, branch, checkout path or host workspace ID
+        lane: String,
+    },
+    /// Remove a lane's workspace and checkout, and with --delete-branch its branch
+    Rm {
+        /// The lane, by ticket ID, branch, checkout path or host workspace ID
+        lane: String,
+        /// Remove it even with uncommitted or untracked files, or unpushed commits
+        #[arg(long)]
+        force: bool,
+        /// Also delete the lane's local branch and its recorded base
+        #[arg(long)]
+        delete_branch: bool,
+    },
 }
 
 /// Runs `bli` with `args` (without the program name) from `cwd`.
@@ -235,6 +251,33 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
                 cli.json,
             )
             .map(Into::into)
+        }
+        Command::Lane(LaneCommand::Inspect { lane }) => {
+            let host = providers.lane_host(&config)?;
+            let code = providers.code_host(&config)?;
+            commands::lane_inspect(
+                host.as_ref(),
+                code.as_ref(),
+                &git,
+                &config,
+                cwd,
+                lane,
+                cli.json,
+            )
+            .map(Into::into)
+        }
+        Command::Lane(LaneCommand::Rm {
+            lane,
+            force,
+            delete_branch,
+        }) => {
+            let host = providers.lane_host(&config)?;
+            let request = commands::RmRequest {
+                name: lane,
+                force: *force,
+                delete_branch: *delete_branch,
+            };
+            commands::lane_rm(host.as_ref(), &git, &config, cwd, &request, cli.json).map(Into::into)
         }
     }
 }

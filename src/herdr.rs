@@ -236,6 +236,41 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
             Check::from_result("permission mode", self.server_running()),
         ]
     }
+
+    fn remove_lane(
+        &self,
+        repo: &Path,
+        path: &Path,
+        workspace: Option<&str>,
+        force: bool,
+    ) -> Result<(), Error> {
+        // `herdr worktree remove` only takes a workspace, so a closed one is reopened first.
+        let opened;
+        let workspace = match workspace {
+            Some(ws) => ws,
+            None => {
+                let repo = repo.to_string_lossy();
+                let path = path.to_string_lossy();
+                let reply: WorktreeOpened = self.herdr(&[
+                    "worktree",
+                    "open",
+                    "--cwd",
+                    &repo,
+                    "--path",
+                    &path,
+                    "--no-focus",
+                    "--trust-repository",
+                ])?;
+                opened = reply.workspace.workspace_id;
+                &opened
+            }
+        };
+        let mut args = vec!["worktree", "remove", "--workspace", workspace];
+        if force {
+            args.push("--force");
+        }
+        self.herdr_unit(&args)
+    }
 }
 
 /// `herdr <group> <verb>`, for messages.
@@ -271,6 +306,11 @@ struct WorktreeCreated {
     worktree: Worktree,
     workspace: Workspace,
     root_pane: Pane,
+}
+
+#[derive(Deserialize)]
+struct WorktreeOpened {
+    workspace: Workspace,
 }
 
 #[derive(Deserialize)]

@@ -83,6 +83,16 @@ pub trait LaneHost {
 
     /// Checks the host's tools, and that it starts agents in bypass-permissions mode, for `bli doctor`.
     fn checks(&self) -> Vec<Check>;
+
+    /// Removes the lane checked out at `path`, with its workspace if one is open, leaving its branch.
+    /// Without `force`, the host refuses a checkout with uncommitted or untracked files.
+    fn remove_lane(
+        &self,
+        repo: &Path,
+        path: &Path,
+        workspace: Option<&str>,
+        force: bool,
+    ) -> Result<(), Error>;
 }
 
 impl<T: LaneHost + ?Sized> LaneHost for &T {
@@ -117,5 +127,15 @@ impl<T: LaneHost + ?Sized> LaneHost for &T {
 
     fn checks(&self) -> Vec<Check> {
         (**self).checks()
+    }
+
+    fn remove_lane(
+        &self,
+        repo: &Path,
+        path: &Path,
+        workspace: Option<&str>,
+        force: bool,
+    ) -> Result<(), Error> {
+        (**self).remove_lane(repo, path, workspace, force)
     }
 }
