@@ -157,7 +157,7 @@ fn ticket_reads_an_unclaimed_open_issue() {
                 url: "https://github.com/ibedwi/bli/issues/4".into(),
             },
             open: true,
-            assignees: vec![],
+            claimed_by: vec![],
         }
     );
 }
@@ -166,7 +166,7 @@ fn ticket_reads_an_unclaimed_open_issue() {
 fn ticket_reads_a_claimed_issues_assignee_logins() {
     let runner = FakeRunner::replying(&fixture("issue_claimed.json"));
     let ticket = GitHub::new(&runner).ticket("3").unwrap();
-    assert_eq!(ticket.assignees, vec!["ibedwi"]);
+    assert_eq!(ticket.claimed_by, vec!["ibedwi"]);
 }
 
 #[test]

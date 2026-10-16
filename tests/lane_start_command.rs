@@ -331,6 +331,7 @@ fn lane_start_reports_a_lane_whose_agent_failed_to_start_with_its_branch() {
     assert_eq!(lane["error"], "agent_not_ready");
     assert_eq!(lane["branch"], "ticket/3-fan-out");
     assert_eq!(lane["path"], "/lanes/ticket-3-fan-out");
+    assert_eq!(fakes.tracker.claimed(), vec!["3"]);
 }
 
 #[test]

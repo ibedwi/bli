@@ -73,7 +73,7 @@ impl<R: ProcessRunner> IssueTracker for GitHub<R> {
                 url: view.url,
             },
             open: view.state == "OPEN",
-            assignees: view.assignees.into_iter().map(|a| a.login).collect(),
+            claimed_by: view.assignees.into_iter().map(|a| a.login).collect(),
         })
     }
 

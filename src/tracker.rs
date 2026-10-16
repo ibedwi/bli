@@ -18,7 +18,7 @@ pub struct TicketDetails {
     pub ticket: Ticket,
     pub open: bool,
     /// Who has claimed the ticket; empty when it is unclaimed.
-    pub assignees: Vec<String>,
+    pub claimed_by: Vec<String>,
 }
 
 pub trait IssueTracker {

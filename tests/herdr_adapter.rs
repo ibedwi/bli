@@ -241,10 +241,7 @@ fn start_agent_reports_an_agent_that_has_not_started_working_yet_as_unknown() {
     let runner = FakeRunner::default()
         .replying("agent start", AGENT_STARTED)
         .replying("agent prompt", AGENT_PROMPTED)
-        .failing(
-            "agent wait",
-            r#"{"error":{"code":"timeout","message":"timed out"},"id":"cli:agent:wait"}"#,
-        );
+        .failing("agent wait", &fixture("error_timeout.json"));
 
     let status = herdr(&runner).start_agent(&lane(), "3", "go").unwrap();
 

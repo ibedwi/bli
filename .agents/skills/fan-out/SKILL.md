@@ -1,6 +1,6 @@
 ---
 name: fan-out
-description: Start one lane per ready ticket with `bli`, each running an agent on the ticket, so tickets build in parallel.
+description: Start one lane per frontier ticket with `bli`, each running an agent on the ticket, so tickets build in parallel.
 disable-model-invocation: true
 ---
 
@@ -29,9 +29,9 @@ bli lane start <id>... --json        # add --base <branch> when base= was given
 
 `bli` starts the lanes one at a time and reports each one in `lanes`, with an `outcome`:
 
-- `started`: the lane exists, its agent was prompted, and the ticket is claimed. `status` is the host's hint about the agent: `working`, `blocked`, `idle` or `unknown`.
+- `started`: the lane exists, the ticket is claimed, and its agent was prompted. `status` is the host's hint about the agent: `working`, `blocked`, `idle` or `unknown`.
 - `skipped`: the ticket already has a lane or a claim; `reason` says which.
-- `failed`: `error` says why. When `branch` and `path` are present, the lane exists but its agent did not start.
+- `failed`: `error` says why. When `path` is present, the lane exists and the ticket is claimed, but its agent did not start.
 
 For each `blocked` lane, read its agent (`herdr agent read t<id> --source recent-unwrapped --lines 60`) and show the developer what it is asking. Answering it is the developer's decision.
 
@@ -45,3 +45,5 @@ A table: ticket title (linked), outcome, branch, status hint, and the reason or 
 - `herdr agent read t<id> --source recent-unwrapped --lines 80`: one lane's latest output.
 
 When the agents are done, run `/fan-in`.
+
+This step is done when every confirmed ticket has a row in the table.

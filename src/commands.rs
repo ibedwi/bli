@@ -104,7 +104,7 @@ pub fn lane_start(
             request.slug,
             &mut report,
         ) {
-            report.outcome = Outcome::Failed;
+            report.outcome = StartOutcome::Failed;
             report.error = Some(e.to_string());
         }
         // A lane that exists, even with a failed agent, still blocks a second start.
@@ -126,13 +126,13 @@ pub fn lane_start(
     let mut out = String::new();
     for r in &reports {
         let detail = match r.outcome {
-            Outcome::Started => format!(
+            StartOutcome::Started => format!(
                 "{}  ({})",
                 r.branch.as_deref().unwrap_or_default(),
                 r.status.unwrap_or(StatusHint::Unknown).as_str()
             ),
-            Outcome::Skipped => r.reason.clone().unwrap_or_default(),
-            Outcome::Failed => format!("error: {}", r.error.as_deref().unwrap_or_default()),
+            StartOutcome::Skipped => r.reason.clone().unwrap_or_default(),
+            StartOutcome::Failed => format!("error: {}", r.error.as_deref().unwrap_or_default()),
         };
         out.push_str(&format!(
             "{}  {}  {}\n",
@@ -167,10 +167,10 @@ fn start_one(
         report.skip(format!("already has a lane on {}", lane.branch));
         return Ok(());
     }
-    if !details.assignees.is_empty() {
+    if !details.claimed_by.is_empty() {
         report.skip(format!(
             "already claimed by {}",
-            details.assignees.join(", ")
+            details.claimed_by.join(", ")
         ));
         return Ok(());
     }
@@ -200,27 +200,28 @@ fn start_one(
     report.path = Some(lane.path.clone());
     report.workspace = Some(lane.workspace.clone());
     git.set_base(&branch, base)?;
+    // Claim as soon as the lane exists, so a lane whose agent fails to start is still claimed.
+    tracker.claim(&ticket.id)?;
     let prompt = config.lane.prompt.replace("{ticket_url}", &ticket.url);
     report.status = Some(host.start_agent(&lane, &ticket.id, &prompt)?);
-    tracker.claim(&ticket.id)?;
-    report.outcome = Outcome::Started;
+    report.outcome = StartOutcome::Started;
     Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum Outcome {
+enum StartOutcome {
     Started,
     Skipped,
     Failed,
 }
 
-impl Outcome {
+impl StartOutcome {
     fn as_str(self) -> &'static str {
         match self {
-            Outcome::Started => "started",
-            Outcome::Skipped => "skipped",
-            Outcome::Failed => "failed",
+            StartOutcome::Started => "started",
+            StartOutcome::Skipped => "skipped",
+            StartOutcome::Failed => "failed",
         }
     }
 }
@@ -233,7 +234,7 @@ struct StartReport {
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     url: Option<String>,
-    outcome: Outcome,
+    outcome: StartOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,7 +257,7 @@ impl StartReport {
             ticket: ticket.to_string(),
             title: None,
             url: None,
-            outcome: Outcome::Failed,
+            outcome: StartOutcome::Failed,
             branch: None,
             base: None,
             path: None,
@@ -268,7 +269,7 @@ impl StartReport {
     }
 
     fn skip(&mut self, reason: String) {
-        self.outcome = Outcome::Skipped;
+        self.outcome = StartOutcome::Skipped;
         self.reason = Some(reason);
     }
 }

@@ -43,7 +43,7 @@ impl FakeTracker {
             TicketDetails {
                 ticket: ticket(id, title),
                 open: true,
-                assignees: assignees.iter().map(|a| a.to_string()).collect(),
+                claimed_by: assignees.iter().map(|a| a.to_string()).collect(),
             },
         );
         self
