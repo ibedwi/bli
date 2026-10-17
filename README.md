@@ -23,9 +23,12 @@ branch = "ticket/{id}-{slug}"       # lane branch names; must contain {id}
 prompt = "/implement {ticket_url}"  # the agent's first prompt
 
 [tracker]
-kind   = "github"   # github
-parent = 1          # optional default parent for `bli frontier`
+kind     = "github"   # github
+parent   = 1          # optional default parent for `bli frontier`
+on_merge = "close"    # what `bli lane clean` does to a merged lane's ticket: close | none | { status = "..." }
 ```
+
+On GitHub Issues, `close` does nothing when the PR's `Closes #<id>` already closed the issue, and `{ status = "..." }` is refused, since issues have no status.
 
 `bli` keeps no state: lanes are found by matching the lane host's live list against `branch` (ADR 0001), so changing the pattern hides existing lanes.
 
@@ -39,6 +42,7 @@ parent = 1          # optional default parent for `bli frontier`
 - `bli lane ship <id> --body-file <file> [--title <title>] [--json]`: fetches `origin`, pushes the lane's branch and opens a pull request against the lane's recorded base, titled with the ticket's title unless `--title` is given. On GitHub Issues, `Closes #<id>` is added to the body unless it already closes the ticket. Refuses when the branch has no commits beyond `origin/<base>`. When the branch already has a pull request, in any state, it is reported instead and nothing is pushed. `--json` prints `{"ticket", "branch", "base", "outcome", "pr"}`, where `outcome` is `opened` or `existing`.
 - `bli lane inspect <lane> [--json]`: what removing a lane would lose. A lane is named by ticket ID, branch, checkout path or host workspace ID; a name matching no lane, or several, fails with the candidates listed. `--json` prints the lane's `{"ticket", "branch", "base", "path", "workspace", "status"}` plus `"modified"` and `"untracked"` (files, relative to the checkout), `"ignored"` (files git ignores, such as `.env`, which go with the checkout; an ignored directory is one entry), `"unpushed"` (`[{"sha", "subject"}]`, commits no remote-tracking branch has, after a pruning fetch of `origin`), `"upstream"` (or `null`) and `"pr"` (`{"number", "state", "url"}` of the branch's open PR, else its newest, with `state` `open`, `merged` or `closed`, or `null`).
 - `bli lane rm <lane> [--delete-branch] [--force] [--json]`: from inside the lane host, removes a lane's workspace and checkout through the host. Its local branch is kept unless `--delete-branch` is given, which also removes its recorded base. Refuses a checkout with uncommitted or untracked files, and `--delete-branch` on a branch with unpushed commits, unless `--force` is given. Ignored files don't count as changes and are removed with the checkout. Always refuses the main checkout and the lane `bli` is running from, by directory or by the host workspace it runs in. `--json` prints `{"ticket", "branch", "path", "workspace", "forced", "branch_deleted"}`. If the lane is removed but its branch can't be deleted, `lane rm` still prints that on stdout, then exits 1 with the `git branch -D` to finish by hand.
+- `bli lane clean [--json]`: from inside the lane host, fetches `origin` and cleans up every lane whose pull request was merged, whatever its commits look like against the remotes, so a squash-merged lane whose remote branch was deleted counts. For each, it refuses what `lane rm` refuses (uncommitted or untracked files, the lane `bli` runs from), then applies `on_merge` to the ticket and removes the lane the way `lane rm --delete-branch` does, with its recorded base. A refused lane is left as it was, ticket included. Then, if the main checkout is on a cleaned lane's base, it is fast-forwarded to `origin/<base>`, keeping uncommitted changes; a main checkout on another branch is left alone. Lanes whose pull request was closed without merging are reported and left alone; lanes with an open pull request, or none, are left out. `--json` prints `{"lanes": [{"ticket", "branch", "base", "path", "workspace", "status", "pr", "outcome", "on_merge"}], "fast_forwarded"}`, where `outcome` is `cleaned`, `left` or `failed`, `on_merge` is the action as written in `bli.toml` (left out for `left` lanes), and `fast_forwarded` is the branch fast-forwarded, or `null`. When any lane fails, or the main checkout can't be fast-forwarded, `lane clean` still prints every lane on stdout, then exits 1 with the reasons on stderr.
 
 `status` is the lane host's hint about the agent (`working`, `blocked`, `idle` or `unknown`), not a verdict.
 

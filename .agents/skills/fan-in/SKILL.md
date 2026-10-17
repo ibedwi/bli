@@ -1,6 +1,6 @@
 ---
 name: fan-in
-description: Collect the lanes started by `/fan-out` with `bli`: ship finished lanes as PRs, surface stalled or questioning agents, and clean up merged lanes.
+description: Collect the lanes started by `/fan-out` with `bli`: ship finished lanes as PRs, surface stalled or questioning agents, clean up merged lanes, and report what merging the open PRs would unblock.
 disable-model-invocation: true
 ---
 
@@ -25,8 +25,8 @@ Each lane has `ticket`, `branch`, `base`, `path`, `workspace`, `status` and `pr`
 | Lane | Action |
 |---|---|
 | `pr` is `open` | Report the PR link and its checks (`gh pr checks <number>`). |
-| `pr` is `merged` | **Clean it up**, as below. |
-| `pr` is `closed` | Report it, and ask whether to remove the lane. |
+| `pr` is `merged` | Leave it for step 3, which cleans it up. |
+| `pr` is `closed` | Report it, and ask whether to remove the lane (with `/remove-lane`). |
 | No PR, `status` is `working` | Leave it. |
 | No PR, any other `status` | **Judge it**, as below. |
 
@@ -44,15 +44,28 @@ When the output leaves you unsure, treat the lane as stalled: show the developer
 2. `bli lane ship <ticket> --body-file <file> --json`. It pushes the branch and opens the PR against the lane's `base`, titled with the ticket's title; on GitHub Issues it adds `Closes #<ticket>` when the body lacks it. `outcome` is `opened`, or `existing` when the lane already had a PR, which it reports instead of opening another.
 3. When `bli` refuses because the lane has no commits beyond its base, report the lane as stalled.
 
-**Clean it up.**
-1. `herdr worktree remove --workspace <workspace>`
-2. `git branch -D <branch>`
-3. `git fetch origin`. If the main checkout is on the lane's base, fast-forward it with `git merge --ff-only origin/<base>`, which works with uncommitted changes where `git pull` (set to rebase) refuses.
-
 This step is done when every lane has had its row's action applied, and every judged lane has a verdict.
 
-## 3. Report
+## 3. Clean up merged lanes
+
+```bash
+bli lane clean --json
+```
+
+It removes every lane whose PR was merged (workspace, checkout, local branch and recorded base), applies the repo's `on_merge` action to each one's ticket, and fast-forwards the main checkout when it is on a cleaned lane's base. It needs no confirmation: the merge was the developer's decision.
+
+Each entry of `lanes` has the lane's fields, its `pr`, and an `outcome`:
+
+- `cleaned`: removed, with `on_merge` the action applied to its ticket.
+- `left`: its PR was closed without merging. `bli` never removes these; they are the closed rows of step 2.
+- `failed`: merged, but not removed, e.g. its checkout has uncommitted files. Show the developer the stderr; its hint holds the `bli lane rm` that removes it by hand, which is `/remove-lane`'s decision, not yours.
+
+`fast_forwarded` is the main checkout's branch when it was brought up to `origin`, else `null`. An exit 1 with JSON on stdout means some of the work failed: report the stderr alongside what succeeded.
+
+This step is done when `bli lane clean` has run and every `failed` lane and stderr message has been shown to the developer.
+
+## 4. Report
 
 - A table: ticket (linked), the verdict or PR state, PR link, and what you did.
-- Which tickets merging the open PRs would unblock, read from the blockers of the parent's open sub-issues.
+- Which tickets merging the open PRs would unblock: an open ticket blocked by an open PR's ticket, whose open blockers all have open PRs. On GitHub Issues, for each open PR's ticket list the tickets it blocks with `gh api 'repos/{owner}/{repo}/issues/<ticket>/dependencies/blocking'`, then each open one's blockers with `.../issues/<blocked>/dependencies/blocked_by`, keeping those whose blockers with `state` `open` are all open PRs' tickets, counting PRs shipped in step 2. Say "none" when nothing would.
 - Once something has merged: new frontier tickets mean `/fan-out` can start the next round.

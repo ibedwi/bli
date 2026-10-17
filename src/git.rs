@@ -159,6 +159,20 @@ impl Git {
         self.git(&["branch", "--quiet", "-D", branch]).map(drop)
     }
 
+    /// The branch the main checkout is on, or `None` on a detached HEAD.
+    pub fn main_branch(&self) -> Result<Option<String>, Error> {
+        let out = output(&self.main, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+        Ok(out.success.then(|| out.stdout.trim().to_string()))
+    }
+
+    /// Fast-forwards the main checkout to `branch` on the remote, as of the last fetch.
+    /// Uncommitted changes are kept, as long as the commits don't touch them.
+    pub fn fast_forward_main(&self, branch: &str) -> Result<(), Error> {
+        let target = format!("{REMOTE}/{branch}");
+        self.git(&["merge", "--quiet", "--ff-only", &target])
+            .map(drop)
+    }
+
     fn git(&self, args: &[&str]) -> Result<String, Error> {
         run(&self.main, args)
     }

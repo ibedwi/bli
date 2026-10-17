@@ -10,7 +10,7 @@ use crate::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use crate::error::Error;
 use crate::git::REMOTE;
 use crate::process::ProcessRunner;
-use crate::tracker::{IssueTracker, Ticket, TicketDetails};
+use crate::tracker::{IssueTracker, OnMerge, Ticket, TicketDetails};
 
 pub struct GitHub<R> {
     runner: R,
@@ -116,6 +116,28 @@ impl<R: ProcessRunner> IssueTracker for GitHub<R> {
         }
         let body = body.trim_end();
         Ok(format!("{body}\n\nCloses #{number}\n"))
+    }
+
+    /// A PR saying `Closes #<n>` closes its issue on merge, so `close` closes only an issue still open.
+    fn on_merge(&self, id: &str, action: &OnMerge) -> Result<(), Error> {
+        let number = issue_number(id)?.to_string();
+        match action {
+            OnMerge::None => Ok(()),
+            OnMerge::Status(status) => Err(Error::new(format!(
+                "cannot move issue #{number} to status `{status}`: GitHub issues have no status"
+            ))
+            .with_hint("set `on_merge` under [tracker] in bli.toml to \"close\" or \"none\"")),
+            OnMerge::Close => {
+                let stdout = self.gh(&["issue", "view", &number, "--json", "state"])?;
+                let view: IssueState = serde_json::from_str(&stdout).map_err(|e| {
+                    Error::new(format!("could not read `gh issue view` output: {e}"))
+                })?;
+                if view.state == "CLOSED" {
+                    return Ok(());
+                }
+                self.gh(&["issue", "close", &number]).map(drop)
+            }
+        }
     }
 
     fn checks(&self) -> Vec<Check> {
@@ -260,6 +282,11 @@ struct IssueView {
     url: String,
     state: String,
     assignees: Vec<Assignee>,
+}
+
+#[derive(Deserialize)]
+struct IssueState {
+    state: String,
 }
 
 #[derive(Deserialize)]

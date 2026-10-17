@@ -15,7 +15,7 @@ use bli::config::Config;
 use bli::error::Error;
 use bli::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
 use bli::process::{Output, ProcessRunner};
-use bli::tracker::{IssueTracker, Ticket, TicketDetails};
+use bli::tracker::{IssueTracker, OnMerge, Ticket, TicketDetails};
 use bli::{Outcome, Providers};
 use tempfile::TempDir;
 
@@ -25,6 +25,7 @@ pub struct FakeTracker {
     frontiers: HashMap<String, Vec<Ticket>>,
     tickets: HashMap<String, TicketDetails>,
     claimed: RefCell<Vec<String>>,
+    on_merged: RefCell<Vec<(String, OnMerge)>>,
     checks: Vec<Check>,
 }
 
@@ -57,6 +58,11 @@ impl FakeTracker {
     pub fn with_check(mut self, check: Check) -> Self {
         self.checks.push(check);
         self
+    }
+
+    /// Every on-merge action applied so far, as (ticket ID, action), in order.
+    pub fn on_merged(&self) -> Vec<(String, OnMerge)> {
+        self.on_merged.borrow().clone()
     }
 
     /// The ticket IDs claimed so far, in order.
@@ -96,6 +102,13 @@ impl IssueTracker for FakeTracker {
     /// Marks the body, so tests can see the tracker had its say.
     fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
         Ok(format!("{body}[closes {id}]\n"))
+    }
+
+    fn on_merge(&self, id: &str, action: &OnMerge) -> Result<(), Error> {
+        self.on_merged
+            .borrow_mut()
+            .push((id.to_string(), action.clone()));
+        Ok(())
     }
 
     fn checks(&self) -> Vec<Check> {
