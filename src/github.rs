@@ -176,7 +176,7 @@ impl<R: ProcessRunner> CodeHost for GitHub<R> {
             "--state",
             "all",
             "--json",
-            "number,url,state,createdAt",
+            "number,url,state,createdAt,headRefOid",
             "--limit",
             "100",
         ])?;
@@ -213,6 +213,7 @@ impl<R: ProcessRunner> CodeHost for GitHub<R> {
             number,
             url,
             state: PrState::Open,
+            head_sha: None,
         })
     }
 }
@@ -302,6 +303,8 @@ struct Pr {
     created_at: String,
     url: String,
     state: String,
+    #[serde(rename = "headRefOid", default)]
+    head_ref_oid: Option<String>,
 }
 
 impl Pr {
@@ -315,6 +318,7 @@ impl Pr {
             number: self.number,
             url: self.url,
             state,
+            head_sha: self.head_ref_oid,
         }
     }
 }

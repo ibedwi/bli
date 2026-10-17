@@ -133,6 +133,14 @@ impl FakeCodeHost {
         self
     }
 
+    /// Adds merged PR `number` from branch `head`, whose last commit was `sha`.
+    pub fn with_merged_pr_at(self, head: &str, number: u64, sha: &str) -> Self {
+        let mut merged = pr(number, PrState::Merged);
+        merged.head_sha = Some(sha.to_string());
+        self.prs.borrow_mut().push((head.to_string(), merged));
+        self
+    }
+
     /// Every push, as (repo, branch).
     pub fn pushed(&self) -> Vec<(PathBuf, String)> {
         self.pushed.borrow().clone()
@@ -148,6 +156,7 @@ pub fn pr(number: u64, state: PrState) -> PullRequest {
         number,
         url: format!("https://code.test/pull/{number}"),
         state,
+        head_sha: None,
     }
 }
 

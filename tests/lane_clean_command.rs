@@ -40,6 +40,17 @@ fn fakes(repo: &Repo, path: &std::path::Path, pr: PrState) -> Fakes {
     }
 }
 
+/// Fakes for a lane whose PR merged with `head` as its last commit.
+fn merged_at(repo: &Repo, path: &std::path::Path, head: &str) -> Fakes {
+    Fakes {
+        host: FakeHost::default()
+            .with_main_checkout_at(repo.path(), "main")
+            .with_checkout_at(path, BRANCH, StatusHint::Idle),
+        code: FakeCodeHost::default().with_merged_pr_at(BRANCH, 12, head),
+        ..Default::default()
+    }
+}
+
 fn branch_exists(repo: &Repo, branch: &str) -> bool {
     !git(repo.path(), &["branch", "--list", branch]).is_empty()
 }
@@ -103,7 +114,7 @@ fn lane_clean_passes_none_to_the_tracker_when_on_merge_is_none() {
 }
 
 #[test]
-fn lane_clean_sets_the_named_status_when_on_merge_is_a_status() {
+fn lane_clean_passes_a_named_status_to_the_tracker_when_on_merge_is_a_status() {
     let (reported, applied) =
         on_merge_under(&format!("{GITHUB}on_merge = {{ status = \"review\" }}\n"));
     assert_eq!(reported, json!({"status": "review"}));
@@ -280,4 +291,95 @@ fn lane_clean_reports_a_main_checkout_that_cannot_fast_forward() {
     assert_eq!(report["lanes"][0]["outcome"], "cleaned");
     assert_eq!(report["fast_forwarded"], json!(null));
     assert!(out.stderr.contains("fast-forward"), "{}", out.stderr);
+}
+
+#[test]
+fn lane_clean_removes_a_merged_lane_whose_branch_is_the_prs_head() {
+    let (repo, path) = lane(GITHUB);
+    squash_merge(&repo, &path);
+    let head = git(&path, &["rev-parse", "HEAD"]);
+    let fakes = merged_at(&repo, &path, &head);
+
+    let out = bli(&["lane", "clean", "--json"], repo.path(), &fakes);
+
+    assert_eq!(json(&out)["lanes"][0]["outcome"], "cleaned");
+    assert!(!branch_exists(&repo, BRANCH));
+}
+
+#[test]
+fn lane_clean_refuses_a_merged_lane_with_commits_made_after_the_merge() {
+    let (repo, path) = lane(GITHUB);
+    squash_merge(&repo, &path);
+    let head = git(&path, &["rev-parse", "HEAD"]);
+    git(
+        &path,
+        &["commit", "-q", "--allow-empty", "-m", "After the merge"],
+    );
+    let fakes = merged_at(&repo, &path, &head);
+
+    let out = bli(&["lane", "clean", "--json"], repo.path(), &fakes);
+
+    assert_eq!(out.code, 1);
+    let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(report["lanes"][0]["outcome"], "failed");
+    assert_eq!(report["lanes"][0].get("on_merge"), None);
+    assert!(
+        report["lanes"][0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("After the merge"),
+        "{report}"
+    );
+    assert!(out.stderr.contains("After the merge"), "{}", out.stderr);
+    assert_eq!(fakes.host.removed(), vec![]);
+    assert_eq!(fakes.tracker.on_merged(), vec![]);
+    assert!(branch_exists(&repo, BRANCH));
+}
+
+#[test]
+fn lane_clean_keeps_each_failed_lanes_hint_when_several_fail() {
+    let repo = Repo::new(GITHUB);
+    let first = repo.add_lane_with_commit("ticket/7-first");
+    let second = repo.add_lane_with_commit("ticket/8-second");
+    std::fs::write(first.join("a.md"), "x").unwrap();
+    std::fs::write(second.join("b.md"), "x").unwrap();
+    let fakes = Fakes {
+        host: FakeHost::default()
+            .with_main_checkout_at(repo.path(), "main")
+            .with_checkout_at(&first, "ticket/7-first", StatusHint::Idle)
+            .with_checkout_at(&second, "ticket/8-second", StatusHint::Idle),
+        code: FakeCodeHost::default()
+            .with_pr("ticket/7-first", 13, PrState::Merged)
+            .with_pr("ticket/8-second", 14, PrState::Merged),
+        ..Default::default()
+    };
+
+    let out = bli(&["lane", "clean", "--json"], repo.path(), &fakes);
+
+    assert_eq!(out.code, 1);
+    let report: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    for (i, branch) in ["ticket/7-first", "ticket/8-second"].iter().enumerate() {
+        let hint = report["lanes"][i]["hint"].as_str().unwrap();
+        assert!(hint.contains(&format!("bli lane rm {branch}")), "{hint}");
+        assert!(!hint.contains("pass --force"), "{hint}");
+        assert!(
+            out.stderr.contains(&format!("bli lane rm {branch}")),
+            "{}",
+            out.stderr
+        );
+    }
+}
+
+#[test]
+fn lane_clean_refuses_a_merged_lane_whose_prs_last_commit_is_not_in_the_repo() {
+    let (repo, path) = lane(GITHUB);
+    squash_merge(&repo, &path);
+    let fakes = merged_at(&repo, &path, "0123456789abcdef0123456789abcdef01234567");
+
+    let out = bli(&["lane", "clean", "--json"], repo.path(), &fakes);
+
+    assert_eq!(out.code, 1);
+    assert!(out.stderr.contains("not in this repo"), "{}", out.stderr);
+    assert_eq!(fakes.host.removed(), vec![]);
+    assert!(branch_exists(&repo, BRANCH));
 }

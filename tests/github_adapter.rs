@@ -344,7 +344,7 @@ fn push_reports_git_failure_with_its_stderr() {
 fn find_pr_lists_the_head_branchs_prs_in_any_state() {
     let runner = FakeRunner::replying(&fixture("pr_list_merged.json"));
     let pr = GitHub::new(&runner)
-        .find_pr("ticket/3-fan-out-on-herdr")
+        .find_pr("ticket/4-remove-lane-lane-inspect-lane-rm")
         .unwrap();
     assert_eq!(
         runner.calls(),
@@ -353,11 +353,11 @@ fn find_pr_lists_the_head_branchs_prs_in_any_state() {
             "pr",
             "list",
             "--head",
-            "ticket/3-fan-out-on-herdr",
+            "ticket/4-remove-lane-lane-inspect-lane-rm",
             "--state",
             "all",
             "--json",
-            "number,url,state,createdAt",
+            "number,url,state,createdAt,headRefOid",
             "--limit",
             "100",
         ]]
@@ -365,9 +365,10 @@ fn find_pr_lists_the_head_branchs_prs_in_any_state() {
     assert_eq!(
         pr,
         Some(PullRequest {
-            number: 12,
-            url: "https://github.com/ibedwi/bli/pull/12".into(),
+            number: 15,
+            url: "https://github.com/ibedwi/bli/pull/15".into(),
             state: PrState::Merged,
+            head_sha: Some("388516324bb6e4f9d30d6a98bd3082d47d1728a1".into()),
         })
     );
 }
@@ -422,6 +423,7 @@ fn open_pr_creates_the_pr_against_the_base_and_reads_its_url() {
             number: 13,
             url: "https://github.com/ibedwi/bli/pull/13".into(),
             state: PrState::Open,
+            head_sha: None,
         }
     );
 }

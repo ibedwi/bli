@@ -576,13 +576,19 @@ pub fn lane_rm(
 ) -> Result<Report, Error> {
     require_inside(host)?;
     let lane = find_lane(host, git, config, cwd, request.name)?;
-    refuse_own_lane(host, cwd, &lane)?;
+    refuse_own_lane(host, cwd, &lane, "bli lane rm")?;
     let branch = match (request.delete_branch, request.force) {
         (false, _) => BranchRemoval::Keep,
         (true, false) => BranchRemoval::DeleteIfPushed,
         (true, true) => BranchRemoval::Delete,
     };
-    refuse_unsafe_removal(git, &lane, request.force, branch)?;
+    refuse_unsafe_removal(
+        git,
+        &lane,
+        request.force,
+        branch,
+        "pass --force to lose them",
+    )?;
     let failure = remove(host, git, &lane, request.force, branch)?;
     let removed = Removed {
         branch_deleted: request.delete_branch && failure.is_none(),
@@ -619,7 +625,13 @@ enum BranchRemoval {
 }
 
 /// Refuses to remove the lane `bli` is running from, by directory or by host workspace.
-fn refuse_own_lane(host: &dyn LaneHost, cwd: &Path, lane: &Lane) -> Result<(), Error> {
+/// `command` is the `bli` command to run from elsewhere instead.
+fn refuse_own_lane(
+    host: &dyn LaneHost,
+    cwd: &Path,
+    lane: &Lane,
+    command: &str,
+) -> Result<(), Error> {
     let own_workspace =
         lane.workspace.is_some() && lane.workspace.as_deref() == host.current_workspace();
     if own_workspace || normalize(cwd).starts_with(normalize(&lane.path)) {
@@ -627,20 +639,22 @@ fn refuse_own_lane(host: &dyn LaneHost, cwd: &Path, lane: &Lane) -> Result<(), E
             "lane {} is the one bli is running from",
             lane.ticket
         ))
-        .with_hint(
-            "run bli from another workspace of the lane host, outside this lane's checkout",
-        ));
+        .with_hint(format!(
+            "run `{command}` from another workspace of the lane host, outside this lane's checkout"
+        )));
     }
     Ok(())
 }
 
 /// Refuses, unless `force`, to remove a lane whose checkout has uncommitted or untracked
 /// files, or to delete a branch with commits on no remote when `branch` asks it be pushed.
+/// `lose_them` ends the hint for uncommitted files: how to remove the lane anyway.
 fn refuse_unsafe_removal(
     git: &Git,
     lane: &Lane,
     force: bool,
     branch: BranchRemoval,
+    lose_them: &str,
 ) -> Result<(), Error> {
     if force {
         return Ok(());
@@ -659,7 +673,7 @@ fn refuse_unsafe_removal(
             lane.ticket,
             files.join(", ")
         ))
-        .with_hint("commit or remove them, or pass --force to lose them"));
+        .with_hint(format!("commit or remove them, or {lose_them}")));
     }
     if branch == BranchRemoval::DeleteIfPushed {
         git.fetch()?;
@@ -735,49 +749,49 @@ pub fn lane_clean(
     require_inside(host)?;
     git.fetch()?;
     let mut reports = Vec::new();
-    let mut failures = Vec::new();
     for lane in lanes(host, git, config)? {
         let Some(pr) = code.find_pr(&lane.branch)? else {
             continue;
         };
-        let outcome = match pr.state {
+        let mut report = CleanReport::new(lane, pr);
+        match report.pr.state {
             PrState::Open => continue,
-            PrState::Closed => CleanOutcome::Left,
-            PrState::Merged => match clean_one(tracker, host, git, config, cwd, &lane) {
-                Ok(None) => CleanOutcome::Cleaned,
+            PrState::Closed => report.outcome = CleanOutcome::Left,
+            PrState::Merged => match clean_one(tracker, host, git, config, cwd, &mut report) {
+                Ok(None) => report.outcome = CleanOutcome::Cleaned,
                 Ok(Some(e)) => {
-                    failures.push(e);
-                    CleanOutcome::Cleaned
+                    report.outcome = CleanOutcome::Cleaned;
+                    report.fail(e);
                 }
-                Err(e) => {
-                    failures.push(e);
-                    CleanOutcome::Failed
-                }
+                Err(e) => report.fail(e),
             },
-        };
-        let on_merge = (outcome != CleanOutcome::Left).then(|| config.tracker.on_merge.clone());
-        reports.push(CleanReport {
-            lane,
-            pr,
-            outcome,
-            on_merge,
-        });
+        }
+        reports.push(report);
     }
+    let mut failures: Vec<_> = reports
+        .iter()
+        .filter_map(|r| r.error.as_ref().map(|e| (e.clone(), r.hint.clone())))
+        .collect();
     let fast_forwarded = fast_forward_main(git, &reports).unwrap_or_else(|e| {
-        failures.push(e);
+        failures.push((e.to_string(), e.hint().map(str::to_string)));
         None
     });
-    let failure = match failures.len() {
-        0 => None,
-        1 => failures.pop(),
-        n => Some(Error::new(format!(
-            "{n} things went wrong cleaning up merged lanes:\n{}",
-            failures
-                .iter()
-                .map(|e| format!("  {e}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ))),
+    let failure = match failures.as_slice() {
+        [] => None,
+        [(message, hint)] => Some(match hint {
+            Some(hint) => Error::new(message).with_hint(hint),
+            None => Error::new(message),
+        }),
+        all => {
+            let mut message = format!("{} problems cleaning up merged lanes:", all.len());
+            for (e, hint) in all {
+                message.push_str(&format!("\n  {e}"));
+                if let Some(hint) = hint {
+                    message.push_str(&format!("\n    hint: {hint}"));
+                }
+            }
+            Some(Error::new(message))
+        }
     };
     if json {
         let stdout = format!(
@@ -835,31 +849,66 @@ fn fast_forward_main(git: &Git, reports: &[CleanReport]) -> Result<Option<String
     Ok(Some(branch))
 }
 
-/// Cleans up one merged lane: applies the on-merge action to its ticket, then removes
-/// it with its branch the way `lane rm --delete-branch` does. The merged PR stands in
-/// for pushed commits, since a squash merge leaves the lane's commits on no remote.
-/// The refusals come first, so a refused lane's ticket is left as it was.
+/// Cleans up `report`'s merged lane: applies the on-merge action to its ticket, then
+/// removes it with its branch the way `lane rm --delete-branch` does. The merged PR
+/// stands in for pushed commits, since a squash merge leaves the lane's commits on no
+/// remote, but commits made after the merge are refused. The refusals come first, so a
+/// refused lane's ticket is left as it was.
 fn clean_one(
     tracker: &dyn IssueTracker,
     host: &dyn LaneHost,
     git: &Git,
     config: &Config,
     cwd: &Path,
-    lane: &Lane,
+    report: &mut CleanReport,
 ) -> Result<Option<Error>, Error> {
-    refuse_own_lane(host, cwd, lane)?;
-    refuse_unsafe_removal(git, lane, false, BranchRemoval::Delete)
-        .map_err(|e| with_lane_hint(e, lane))?;
+    let lane = &report.lane;
+    let by_hand = format!(
+        "remove the lane by hand with `bli lane rm {} --delete-branch --force` to lose them",
+        lane.branch
+    );
+    refuse_own_lane(host, cwd, lane, "bli lane clean")?;
+    refuse_unsafe_removal(git, lane, false, BranchRemoval::Delete, &by_hand)?;
+    if let Some(head) = &report.pr.head_sha {
+        refuse_commits_after_merge(git, lane, report.pr.number, head, &by_hand)?;
+    }
     tracker.on_merge(&lane.ticket, &config.tracker.on_merge)?;
-    remove(host, git, lane, false, BranchRemoval::Delete)
+    report.on_merge = Some(config.tracker.on_merge.clone());
+    remove(host, git, &report.lane, false, BranchRemoval::Delete)
 }
 
-/// Points a refusal to clean `lane` at removing it by hand.
-fn with_lane_hint(e: Error, lane: &Lane) -> Error {
-    Error::new(e.to_string()).with_hint(format!(
-        "commit or remove them, or remove the lane by hand with `bli lane rm {} --delete-branch --force`",
-        lane.branch
+/// Refuses to delete a merged lane's branch when it has commits that PR `number`,
+/// last at commit `head`, didn't merge.
+fn refuse_commits_after_merge(
+    git: &Git,
+    lane: &Lane,
+    number: u64,
+    head: &str,
+    lose_them: &str,
+) -> Result<(), Error> {
+    let after = match git.commits_beyond(&lane.branch, head)? {
+        Some(after) if after.is_empty() => return Ok(()),
+        Some(after) => after,
+        None => {
+            return Err(Error::new(format!(
+                "cannot tell whether branch {} has commits PR #{number} didn't merge: its last commit {head} is not in this repo",
+                lane.branch
+            ))
+            .with_hint(format!("fetch it, or {lose_them}")))
+        }
+    };
+    let commits: Vec<_> = after
+        .iter()
+        .map(|c| format!("{} {}", c.sha, c.subject))
+        .collect();
+    Err(Error::new(format!(
+        "branch {} has commits made after PR #{number} merged: {}",
+        lane.branch,
+        commits.join("; ")
     ))
+    .with_hint(format!(
+        "ship them in a new PR from another branch, or {lose_them}"
+    )))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -890,8 +939,31 @@ struct CleanReport {
     lane: Lane,
     pr: PullRequest,
     outcome: CleanOutcome,
+    /// The on-merge action, once it has been applied to the lane's ticket.
     #[serde(skip_serializing_if = "Option::is_none")]
     on_merge: Option<OnMerge>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+}
+
+impl CleanReport {
+    fn new(lane: Lane, pr: PullRequest) -> Self {
+        CleanReport {
+            lane,
+            pr,
+            outcome: CleanOutcome::Failed,
+            on_merge: None,
+            error: None,
+            hint: None,
+        }
+    }
+
+    fn fail(&mut self, e: Error) {
+        self.hint = e.hint().map(str::to_string);
+        self.error = Some(e.to_string());
+    }
 }
 
 /// A lane as `bli` sees it: a host checkout whose branch matches the pattern (ADR 0001).

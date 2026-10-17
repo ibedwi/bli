@@ -31,6 +31,9 @@ pub struct PullRequest {
     pub number: u64,
     pub url: String,
     pub state: PrState,
+    /// The last commit on the PR's head branch, when the code host says.
+    #[serde(skip)]
+    pub head_sha: Option<String>,
 }
 
 /// A pull request to open from branch `head` into branch `base`.

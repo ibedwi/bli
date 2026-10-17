@@ -126,14 +126,22 @@ impl Git {
     pub fn unpushed(&self, branch: &str) -> Result<Vec<Commit>, Error> {
         let reference = format!("refs/heads/{branch}");
         let out = self.git(&["log", "--format=%h%x09%s", &reference, "--not", "--remotes"])?;
-        Ok(out
-            .lines()
-            .filter_map(|line| line.split_once('\t'))
-            .map(|(sha, subject)| Commit {
-                sha: sha.to_string(),
-                subject: subject.to_string(),
-            })
-            .collect())
+        Ok(commits(&out))
+    }
+
+    /// The commits on local branch `branch` that commit `sha` doesn't have, newest first,
+    /// or `None` when `sha` is not in this repo.
+    pub fn commits_beyond(&self, branch: &str, sha: &str) -> Result<Option<Vec<Commit>>, Error> {
+        let known = output(
+            &self.main,
+            &["cat-file", "-e", &format!("{sha}^{{commit}}")],
+        )?;
+        if !known.success {
+            return Ok(None);
+        }
+        let reference = format!("refs/heads/{branch}");
+        let out = self.git(&["log", "--format=%h%x09%s", &reference, "--not", sha])?;
+        Ok(Some(commits(&out)))
     }
 
     /// The upstream `branch` tracks, such as `origin/ticket/4-x`, if any.
@@ -198,6 +206,17 @@ impl Changes {
 pub struct Commit {
     pub sha: String,
     pub subject: String,
+}
+
+/// Parses `git log --format=%h%x09%s` output.
+fn commits(log: &str) -> Vec<Commit> {
+    log.lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(sha, subject)| Commit {
+            sha: sha.to_string(),
+            subject: subject.to_string(),
+        })
+        .collect()
 }
 
 fn base_key(branch: &str) -> String {

@@ -56,9 +56,9 @@ It removes every lane whose PR was merged (workspace, checkout, local branch and
 
 Each entry of `lanes` has the lane's fields, its `pr`, and an `outcome`:
 
-- `cleaned`: removed, with `on_merge` the action applied to its ticket.
+- `cleaned`: removed, with `on_merge` the action applied to its ticket. An `error` here means its branch could not be deleted; show it with its `hint`.
 - `left`: its PR was closed without merging. `bli` never removes these; they are the closed rows of step 2.
-- `failed`: merged, but not removed, e.g. its checkout has uncommitted files. Show the developer the stderr; its hint holds the `bli lane rm` that removes it by hand, which is `/remove-lane`'s decision, not yours.
+- `failed`: merged, but not removed, e.g. its checkout has uncommitted files or its branch has commits made after the merge. Show the developer its `error` and `hint`; the hint holds the `bli lane rm` that removes it by hand, losing that work, which is `/remove-lane`'s decision, not yours.
 
 `fast_forwarded` is the main checkout's branch when it was brought up to `origin`, else `null`. An exit 1 with JSON on stdout means some of the work failed: report the stderr alongside what succeeded.
 
