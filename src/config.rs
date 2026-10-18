@@ -121,6 +121,13 @@ impl Config {
                     .with_hint("add [tracker.clickup] with at least workspace_id = \"...\""),
             );
         }
+        if let Some(clickup) = &config.tracker.clickup {
+            check_api_base(&clickup.api_base).map_err(|why| {
+                invalid(&format!("`api_base` under [tracker.clickup] {why}")).with_hint(format!(
+                    "the API token is sent to api_base: use https://, or http:// only to localhost for a local stub; the default is {CLICKUP_API_BASE}"
+                ))
+            })?;
+        }
         Ok(config)
     }
 }
@@ -132,6 +139,44 @@ fn clickup_secret(text: &str) -> Option<String> {
     let raw = toml::from_str::<toml::Table>(text).ok()?;
     let clickup = raw.get("tracker")?.get("clickup")?.as_table()?;
     clickup.keys().find(|k| k.contains("token")).cloned()
+}
+
+/// Where the ClickUp token may be sent: any host over HTTPS, or over plain HTTP only to this
+/// machine, for a local stub. bli.toml is committed, so it must not be able to send the token
+/// across the network in cleartext, or carry credentials of its own in the address.
+fn check_api_base(base: &str) -> Result<(), &'static str> {
+    let lower = base.to_ascii_lowercase();
+    let (secure, rest) = if let Some(rest) = lower.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = lower.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        return Err("must start with https://");
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err("must not hold a user name or password");
+    }
+    if authority.is_empty() {
+        return Err("has no host");
+    }
+    if secure || is_loopback(authority) {
+        Ok(())
+    } else {
+        Err("may use plain http:// only to localhost")
+    }
+}
+
+/// Whether `authority` (`host` or `host:port`) names this machine.
+fn is_loopback(authority: &str) -> bool {
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Walks up from `cwd` to the checkout root (the directory holding `.git`) looking for `bli.toml`.

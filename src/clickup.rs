@@ -34,6 +34,8 @@ impl ClickUp {
     pub fn new(settings: &ClickUpConfig, token: Option<Token>) -> Self {
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            // ClickUp's API doesn't redirect: report one, so no request leaves api_base.
+            .max_redirects(0)
             .timeout_global(Some(Duration::from_secs(30)))
             .build()
             .into();
@@ -200,6 +202,9 @@ fn parse_reply<T: DeserializeOwned>(
             401 => e.with_hint(format!(
                 "check that {TOKEN_VAR} holds a valid ClickUp personal API token"
             )),
+            300..=399 => e.with_hint(
+                "ClickUp's API doesn't redirect, so bli doesn't follow: check api_base in bli.toml",
+            ),
             _ => e,
         });
     }

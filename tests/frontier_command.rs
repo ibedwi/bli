@@ -286,6 +286,52 @@ fn a_clickup_token_in_bli_toml_is_refused() {
     assert!(out.stderr.contains("CLICKUP_API_TOKEN"), "{}", out.stderr);
 }
 
+fn with_api_base(base: &str) -> String {
+    format!("{CLICKUP}api_base = \"{base}\"\n")
+}
+
+#[test]
+fn a_clickup_api_base_may_be_https_anywhere_or_plain_http_to_this_machine() {
+    for base in [
+        "https://api.clickup.com/api/v2",
+        "HTTPS://proxy.example/clickup/api/v2",
+        "http://127.0.0.1:8080",
+        "http://localhost:9/api/v2",
+        "http://[::1]:9",
+    ] {
+        let repo = repo(Some(&with_api_base(base)));
+        let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+        let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+        assert_eq!(out.code, 0, "{base}: {}", out.stderr);
+    }
+}
+
+#[test]
+fn a_clickup_api_base_that_would_send_the_token_in_cleartext_or_with_credentials_is_refused() {
+    for base in [
+        "http://api.clickup.com/api/v2",
+        "http://localhost.attacker.test/api/v2",
+        "http://127.0.0.1.attacker.test",
+        "http://127.0.0.1@attacker.test/api/v2",
+        "https://user:pass@api.clickup.com/api/v2",
+        "ftp://api.clickup.com/api/v2",
+        "api.clickup.com/api/v2",
+        "https://",
+    ] {
+        let repo = repo(Some(&with_api_base(base)));
+        let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+        let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+        assert_ne!(out.code, 0, "{base} was accepted");
+        assert!(out.stderr.contains("api_base"), "{base}: {}", out.stderr);
+        assert!(out.stderr.contains("hint:"), "{base}: {}", out.stderr);
+        assert!(out.stdout.is_empty(), "{base}: {}", out.stdout);
+    }
+}
+
 #[test]
 fn clickup_ids_may_be_written_as_bare_numbers() {
     let repo = repo(Some(

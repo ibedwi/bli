@@ -41,7 +41,7 @@ parent = "86c1x2y3z"            # optional default parent task
 workspace_id = "9012345"        # required; the number after app.clickup.com/ in ClickUp's URLs
 list_id      = "901234567"      # optional; only look for subtasks in this list
 space_id     = "90123456"       # optional; only look for subtasks in this space
-api_base     = "https://api.clickup.com/api/v2"  # optional; the default
+api_base     = "https://api.clickup.com/api/v2"  # optional; the default; https://, or http:// only to localhost
 ```
 
 The API token is never read from `bli.toml`, which refuses one. `bli` takes it from `CLICKUP_API_TOKEN` in the environment, else from `CLICKUP_API_TOKEN=...` in the `.env` of the checkout it runs in, else from the main checkout's `.env`, so lanes, which have no `.env` of their own, still find it.

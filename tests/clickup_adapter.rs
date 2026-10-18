@@ -427,6 +427,36 @@ fn a_failed_request_reports_clickups_error() {
 }
 
 #[test]
+fn a_redirect_is_reported_rather_than_followed_so_requests_stay_at_the_api_base() {
+    let elsewhere = Stub::start().on("GET", "/task/86abc", task("86abc", "Fan-out", "open"));
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+    let target = format!("{}/task/86abc", elsewhere.base);
+    thread::spawn(move || {
+        for req in server.incoming_requests() {
+            let location = tiny_http::Header::from_bytes("Location", target.as_bytes()).unwrap();
+            let _ = req.respond(tiny_http::Response::empty(302).with_header(location));
+        }
+    });
+    let settings = ClickUpConfig {
+        api_base: base,
+        ..elsewhere.settings()
+    };
+
+    let e = ClickUp::new(&settings, Some(token("pk_test")))
+        .ticket("86abc")
+        .unwrap_err();
+
+    assert!(e.to_string().contains("302"), "{e}");
+    assert!(e.hint().unwrap().contains("api_base"), "{e:?}");
+    assert!(
+        elsewhere.requests().is_empty(),
+        "{:?}",
+        elsewhere.requests()
+    );
+}
+
+#[test]
 fn without_a_token_every_call_fails_with_a_hint_and_sends_nothing() {
     let stub = Stub::start();
     let clickup = ClickUp::new(&stub.settings(), None);
