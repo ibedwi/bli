@@ -26,6 +26,15 @@ impl StatusHint {
             StatusHint::Unknown => "unknown",
         }
     }
+
+    /// The status most in need of attention among a workspace's agents, or unknown with none.
+    pub fn most_urgent(statuses: impl IntoIterator<Item = StatusHint>) -> StatusHint {
+        let statuses: Vec<_> = statuses.into_iter().collect();
+        [StatusHint::Blocked, StatusHint::Working, StatusHint::Idle]
+            .into_iter()
+            .find(|s| statuses.contains(s))
+            .unwrap_or(StatusHint::Unknown)
+    }
 }
 
 /// One checkout the host knows about, whether or not it is a lane.

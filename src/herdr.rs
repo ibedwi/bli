@@ -366,16 +366,12 @@ struct AgentList {
 impl AgentList {
     /// The status of the agents in workspace `ws`, picking the one most in need of attention.
     fn status_of(&self, ws: &str) -> StatusHint {
-        let statuses: Vec<_> = self
-            .agents
-            .iter()
-            .filter(|a| a.workspace_id == ws)
-            .map(Agent::status)
-            .collect();
-        [StatusHint::Blocked, StatusHint::Working, StatusHint::Idle]
-            .into_iter()
-            .find(|s| statuses.contains(s))
-            .unwrap_or(StatusHint::Unknown)
+        StatusHint::most_urgent(
+            self.agents
+                .iter()
+                .filter(|a| a.workspace_id == ws)
+                .map(Agent::status),
+        )
     }
 }
 

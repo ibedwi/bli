@@ -535,28 +535,23 @@ fn remove_lane_with_force_archives_without_looking_at_the_checkout() {
 
 #[test]
 fn remove_lane_fails_when_superset_leaves_the_checkout_behind() {
-    let runner = removing().replying(
-        "superset workspaces archive",
-        &format!(
-            r#"{{"deleted":["{LANE_WS}"],"warnings":["{LANE_WS}: Skipped worktree removal at {LANE_PATH}: project metadata is missing"]}}"#
-        ),
-    );
+    let left_behind = tempfile::tempdir().unwrap();
+    let runner = removing();
 
     let err = superset(&runner)
-        .remove_lane(Path::new(REPO), Path::new(LANE_PATH), Some(LANE_WS), true)
+        .remove_lane(Path::new(REPO), left_behind.path(), Some(LANE_WS), true)
         .unwrap_err();
 
-    assert!(
-        err.to_string().contains("Skipped worktree removal"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("left its checkout"), "{err}");
 }
 
 #[test]
-fn remove_lane_ignores_warnings_that_leave_nothing_behind() {
+fn remove_lane_ignores_warnings_when_the_checkout_is_gone() {
     let runner = removing().replying(
         "superset workspaces archive",
-        &format!(r#"{{"deleted":["{LANE_WS}"],"warnings":["{LANE_WS}: 1 terminal(s) may still be running"]}}"#),
+        &format!(
+            r#"{{"deleted":["{LANE_WS}"],"warnings":["{LANE_WS}: 1 terminal(s) may still be running"]}}"#
+        ),
     );
 
     superset(&runner)
@@ -691,4 +686,31 @@ fn checks_warn_with_an_install_hint_when_superset_is_missing() {
         checks[0].hint.as_deref().unwrap().contains("superset.sh"),
         "{checks:?}"
     );
+}
+
+#[test]
+fn the_host_check_warns_when_supersets_host_service_does_not_answer() {
+    let status =
+        fixture("status_running.json").replace(r#""healthy": true"#, r#""healthy": false"#);
+    let runner = checking(&fixture("agents_list.json")).replying("superset status", &status);
+
+    let checks = superset(&runner).checks();
+
+    assert_eq!(checks[1].status, CheckStatus::Warn);
+    assert!(checks[1].detail.contains("not responding"), "{checks:?}");
+}
+
+#[test]
+fn create_lane_finds_the_project_through_a_symlinked_repo_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("bli");
+    let link = dir.path().join("link");
+    std::fs::create_dir(&repo).unwrap();
+    std::os::unix::fs::symlink(&repo, &link).unwrap();
+    let projects = fixture("projects_list.json").replace(REPO, repo.to_str().unwrap());
+    let runner = creating().replying("superset projects list", &projects);
+
+    superset(&runner).create_lane(&link, &new_lane()).unwrap();
+
+    assert_eq!(runner.calls()[2][5], PROJECT);
 }

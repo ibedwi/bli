@@ -34,9 +34,7 @@ impl<R: ProcessRunner> Superset<R> {
 
     /// Runs `superset` with `args` and parses its JSON reply.
     fn superset<T: DeserializeOwned>(&self, args: &[&str]) -> Result<T, Error> {
-        let stdout = self.superset_text(args)?;
-        serde_json::from_str(&stdout)
-            .map_err(|e| Error::new(format!("could not read `{}` output: {e}", command(args))))
+        parse(args, &self.superset_text(args)?)
     }
 
     /// Runs `superset` with `args` and returns its stdout, or the error it reported.
@@ -70,9 +68,9 @@ impl<R: ProcessRunner> Superset<R> {
     /// Runs `git` in `dir`.
     fn git(&self, dir: &Path, args: &[&str]) -> Result<String, Error> {
         let dir = dir.to_string_lossy();
-        let mut full = vec!["-C", &dir];
-        full.extend_from_slice(args);
-        let out = self.run("git", &full)?;
+        let mut git_args = vec!["-C", &dir];
+        git_args.extend_from_slice(args);
+        let out = self.run("git", &git_args)?;
         if !out.success {
             return Err(Error::new(format!(
                 "`git {}` failed: {}",
@@ -86,9 +84,10 @@ impl<R: ProcessRunner> Superset<R> {
     /// The ID of the Superset project whose repo is the main checkout at `repo`.
     fn project(&self, repo: &Path) -> Result<String, Error> {
         let projects: Vec<Project> = self.superset(&["projects", "list", "--local", "--json"])?;
+        let repo_path = canonical(repo);
         projects
             .into_iter()
-            .find(|p| p.path == repo)
+            .find(|p| canonical(&p.path) == repo_path)
             .map(|p| p.id)
             .ok_or_else(|| {
                 Error::new(format!("{} is not a Superset project", repo.display())).with_hint(
@@ -99,15 +98,20 @@ impl<R: ProcessRunner> Superset<R> {
                 )
             })
     }
-}
 
-impl<R: ProcessRunner> Superset<R> {
     /// Whether Superset's host service, which every lane command talks to, is up.
     fn host_running(&self) -> Result<String, Error> {
         let status: HostStatus = self.superset(&["status", "--json"])?;
         if !status.running {
             return Err(Error::new("Superset's host service is not running")
                 .with_hint("open the Superset app, or run `superset start --daemon`"));
+        }
+        if status.healthy == Some(false) {
+            return Err(
+                Error::new("Superset's host service is running but not responding").with_hint(
+                    "restart the Superset app, or run `superset stop` then `superset start --daemon`",
+                ),
+            );
         }
         Ok(match status.endpoint {
             Some(endpoint) => format!("Superset's host service is running at {endpoint}"),
@@ -119,12 +123,12 @@ impl<R: ProcessRunner> Superset<R> {
     /// permission prompts. Superset keeps Claude's flags in the preset, not on `bli`'s command line.
     fn claude_bypasses_permissions(&self) -> Result<String, Error> {
         let presets: Vec<AgentPreset> = self.superset(&["agents", "list", "--local", "--json"])?;
-        let fix = "in Superset, open Settings → Agents and add `--dangerously-skip-permissions` to the Claude agent's arguments";
+        let add_the_flag = "in Superset, open Settings → Agents and add `--dangerously-skip-permissions` to the Claude agent's arguments";
         let claude = presets
             .iter()
             .filter(|p| p.preset_id == "claude")
             .min_by_key(|p| p.order)
-            .ok_or_else(|| Error::new("Superset has no Claude preset").with_hint(fix))?;
+            .ok_or_else(|| Error::new("Superset has no Claude preset").with_hint(add_the_flag))?;
         let argv: Vec<&str> = claude
             .command
             .split_whitespace()
@@ -141,7 +145,7 @@ impl<R: ProcessRunner> Superset<R> {
                 claude.label,
                 argv.join(" ")
             ))
-            .with_hint(fix));
+            .with_hint(add_the_flag));
         }
         Ok(format!(
             "Superset's Claude preset \"{}\" runs `{}`",
@@ -149,6 +153,12 @@ impl<R: ProcessRunner> Superset<R> {
             argv.join(" ")
         ))
     }
+}
+
+/// Parses the JSON reply of `superset` run with `args`.
+fn parse<T: DeserializeOwned>(args: &[&str], stdout: &str) -> Result<T, Error> {
+    serde_json::from_str(stdout)
+        .map_err(|e| Error::new(format!("could not read `{}` output: {e}", command(args))))
 }
 
 /// An error Superset reported on stderr, as a `bli` error carrying Superset's hint.
@@ -263,8 +273,7 @@ impl<R: ProcessRunner> LaneHost for Superset<R> {
                     .ok_or_else(|| failed(&args, &stderr))
             }
         };
-        let waited: AgentWaited = serde_json::from_str(&stdout)
-            .map_err(|e| Error::new(format!("could not read `{}` output: {e}", command(&args))))?;
+        let waited: AgentWaited = parse(&args, &stdout)?;
         Ok(status_of(&waited.state))
     }
 
@@ -373,14 +382,19 @@ impl<R: ProcessRunner> LaneHost for Superset<R> {
         }
         let archived: Archived =
             self.superset(&["workspaces", "archive", workspace, "--local", "--json"])?;
-        // Superset archives the workspace even when it skips removing the checkout, and says so.
-        match archived.warnings.iter().find(|w| w.contains("Skipped")) {
-            Some(warning) => Err(Error::new(format!(
-                "Superset archived workspace {workspace} but left its checkout behind: {warning}"
-            ))
-            .with_hint(format!("remove {} by hand", path.display()))),
-            None => Ok(()),
+        // Superset archives the workspace even when it leaves the checkout on disk, and
+        // says so only in a warning, so `bli` looks for itself.
+        if path.exists() {
+            let mut message = format!(
+                "Superset archived workspace {workspace} but left its checkout at {}",
+                path.display()
+            );
+            if !archived.warnings.is_empty() {
+                message = format!("{message}: {}", archived.warnings.join("; "));
+            }
+            return Err(Error::new(message).with_hint(format!("remove {} by hand", path.display())));
         }
+        Ok(())
     }
 }
 
@@ -403,6 +417,11 @@ fn status_of(state: &str) -> StatusHint {
         "idle" => StatusHint::Idle,
         _ => StatusHint::Unknown,
     }
+}
+
+/// `path` with symlinks resolved, so two spellings of one repo compare equal.
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// `superset <group> <verb>`, for messages.
@@ -468,18 +487,14 @@ struct Snapshot {
 impl Snapshot {
     /// The status of the agents in workspace `ws`, picking the one most in need of attention.
     fn status_of(&self, ws: &str) -> StatusHint {
-        let statuses: Vec<_> = self
-            .workspaces
-            .iter()
-            .filter(|w| w.id == ws)
-            .flat_map(|w| &w.terminals)
-            .filter_map(|t| t.agent.as_ref())
-            .map(|a| status_of(&a.state))
-            .collect();
-        [StatusHint::Blocked, StatusHint::Working, StatusHint::Idle]
-            .into_iter()
-            .find(|s| statuses.contains(s))
-            .unwrap_or(StatusHint::Unknown)
+        StatusHint::most_urgent(
+            self.workspaces
+                .iter()
+                .filter(|w| w.id == ws)
+                .flat_map(|w| &w.terminals)
+                .filter_map(|t| t.agent.as_ref())
+                .map(|a| status_of(&a.state)),
+        )
     }
 }
 
@@ -511,10 +526,11 @@ struct Archived {
     warnings: Vec<String>,
 }
 
-/// `superset status --json` output; only `running` and `endpoint` matter to `bli`.
+/// `superset status --json` output; only these fields matter to `bli`.
 #[derive(Deserialize)]
 struct HostStatus {
     running: bool,
+    healthy: Option<bool>,
     endpoint: Option<String>,
 }
 
