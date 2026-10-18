@@ -1,6 +1,6 @@
 ---
 name: fan-in
-description: Collect the lanes started by `/fan-out` with `bli`: ship finished lanes as PRs, surface stalled or questioning agents, clean up merged lanes, and report what merging the open PRs would unblock.
+description: "Collect the lanes started by `/fan-out` with `bli`: ship finished lanes as PRs, surface stalled or questioning agents, clean up merged lanes, and report what merging the open PRs would unblock."
 disable-model-invocation: true
 ---
 
