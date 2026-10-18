@@ -11,6 +11,12 @@ cargo install --path .                  # fallback
 
 Develop with `nix develop`, then `cargo test`.
 
+The `fan-out`, `fan-in` and `remove-lane` skills that drive `bli` live in `.agents/skills/`. Install them into a repo with:
+
+```sh
+npx skills add ibedwi/bli -s fan-out -s fan-in -s remove-lane
+```
+
 ## Configure
 
 Each repo commits a `bli.toml` at its root:
