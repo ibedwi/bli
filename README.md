@@ -29,18 +29,34 @@ branch = "ticket/{id}-{slug}"       # lane branch names; must contain {id}
 prompt = "/implement {ticket_url}"  # the agent's first prompt
 
 [tracker]
-kind     = "github"   # github
+kind     = "github"   # github | clickup
 parent   = 1          # optional default parent for `bli frontier`
 on_merge = "close"    # what `bli lane clean` does to a merged lane's ticket: close | none | { status = "..." }
 ```
 
 On GitHub Issues, `close` does nothing when the PR's `Closes #<id>` already closed the issue, and `{ status = "..." }` is refused, since issues have no status.
 
+On ClickUp, tickets are tasks, named by their native task ID (the `<id>` in `https://app.clickup.com/t/<id>`), and the frontier is a parent task's subtasks. A subtask is blocked while a task it is "waiting on" is open, and claimed while it has an assignee. A pull request can't close a ClickUp task, so `close` moves the task to its list's closed status when `bli lane clean` runs, and `{ status = "..." }` moves it to that status; either does nothing when the task is already there (for `close`, in any closed or done status). ClickUp needs its own table:
+
+```toml
+[tracker]
+kind   = "clickup"
+parent = "86c1x2y3z"            # optional default parent task
+
+[tracker.clickup]
+workspace_id = "9012345"        # required; the number after app.clickup.com/ in ClickUp's URLs
+list_id      = "901234567"      # optional; only look for subtasks in this list
+space_id     = "90123456"       # optional; only look for subtasks in this space
+api_base     = "https://api.clickup.com/api/v2"  # optional; the default; https://, or http:// only to localhost
+```
+
+The API token is never read from `bli.toml`, which refuses one. `bli` takes it from `CLICKUP_API_TOKEN` in the environment, else from `CLICKUP_API_TOKEN=...` in the `.env` of the checkout it runs in, else from the main checkout's `.env`, so lanes, which have no `.env` of their own, still find it.
+
 `bli` keeps no state: lanes are found by matching the lane host's live list against `branch` (ADR 0001), so changing the pattern hides existing lanes.
 
 ## Commands
 
-- `bli doctor [--json]`: checks this repo's setup before a fan-out and reports each check as `pass` or `warn`: `git` is installed, then the issue tracker's checks (on GitHub: `gh` is installed and `gh auth status` succeeds), then the lane host's (on herdr: `herdr` is installed, and the permission-mode check, which passes when the herdr server is running, since `bli` passes `--permission-mode bypassPermissions` itself). A missing or invalid `bli.toml` is a `warn` too, and then only `git` is checked, since there is no tracker or host to check. `--json` prints `{"checks": [{"name", "status", "detail", "hint"}]}`, with `hint` left out when there is none. When any check warns, `doctor` still prints every check, then exits 1 with a summary on stderr.
+- `bli doctor [--json]`: checks this repo's setup before a fan-out and reports each check as `pass` or `warn`: `git` is installed, then the issue tracker's checks (on GitHub: `gh` is installed and `gh auth status` succeeds; on ClickUp: `clickup token`, that a token was found and where, and `clickup auth`, that ClickUp accepts it and it can see `workspace_id`), then the lane host's (on herdr: `herdr` is installed, and the permission-mode check, which passes when the herdr server is running, since `bli` passes `--permission-mode bypassPermissions` itself). A missing or invalid `bli.toml` is a `warn` too, and then only `git` is checked, since there is no tracker or host to check. `--json` prints `{"checks": [{"name", "status", "detail", "hint"}]}`, with `hint` left out when there is none. When any check warns, `doctor` still prints every check, then exits 1 with a summary on stderr.
 - `bli frontier [--parent <id>] [--json]`: the tickets under a parent that are open, unblocked, unclaimed and have no lane. `--json` prints `{"parent": "<id>", "tickets": [{"id", "title", "url"}]}`.
 - `bli lane start <id>... [--base <branch>] [--slug <slug>] [--json]`: from inside the lane host, fetches `origin`, then for each ticket in turn creates a lane on a new branch from `origin/<base>`, records the base as `git config branch.<branch>.bliBase`, starts Claude in bypass-permissions mode with the configured prompt, and claims the ticket. Tickets with a lane or a claim are skipped. The slug is the first five words of the title in kebab-case; `--slug` overrides it for a single ticket. `--json` prints `{"base", "lanes": [{"ticket", "title", "url", "outcome", "branch", "base", "path", "workspace", "status", "reason", "error"}]}`, where `outcome` is `started`, `skipped` or `failed` and absent fields are left out. One lane failing doesn't stop the rest. When any lane fails, `lane start` still prints every lane's outcome on stdout, then exits 1 with a summary on stderr; skipped lanes are not failures.
 - `bli lane list [--json]`: every lane, from the lane host's live list, with its pull request. `--json` prints `{"lanes": [{"ticket", "branch", "base", "path", "workspace", "status", "pr"}]}`, where `pr` is `null` or `{"number", "url", "state"}` and `state` is `open`, `merged` or `closed`.
