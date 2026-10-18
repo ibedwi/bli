@@ -22,8 +22,8 @@ Show the developer the report, phrased as what removal would lose:
 
 - `ticket`, `branch`, `path`, and `status`, the host's hint about the agent. A `working` or `blocked` agent is still running in the lane: say so.
 - `modified`, `untracked` and `ignored`: files lost with the checkout. `ignored` files go even without force, so call out any that matter, like `.env`.
-- `unpushed`: commits on no remote, lost if the branch is deleted.
-- `upstream`, and `pr` with its `state` and `url`. A `merged` PR means the work has landed.
+- `unpushed`: commits on no remote, lost if the branch is deleted. With a `merged` PR they are usually a squash merge whose remote branch was deleted: the work has landed, so say so rather than calling them lost.
+- `upstream`, and `pr` with its `state` and `url`. A `merged` PR means the work has landed; no PR, or an `open` one, means it hasn't: say so.
 
 With `dry-run`, the run ends here.
 

@@ -12,5 +12,6 @@ toml = "0.8"
 ureq = "3"
 
 [dev-dependencies]
+serde_yaml = "0.9"
 tempfile = "3"
 tiny_http = "0.12"
