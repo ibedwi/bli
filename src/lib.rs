@@ -8,6 +8,7 @@ pub mod git;
 pub mod github;
 pub mod herdr;
 pub mod host;
+pub mod init;
 pub mod process;
 pub mod superset;
 pub mod tracker;
@@ -34,6 +35,8 @@ pub trait Providers {
     fn code_host(&self, config: &Config) -> Result<Box<dyn CodeHost + '_>, Error>;
     /// Runs `git` for `bli doctor`'s git check.
     fn git_runner(&self) -> &dyn ProcessRunner;
+    /// Asks `bli init`'s questions; fails when there is no terminal to ask them in.
+    fn prompter(&self) -> Result<Box<dyn init::Prompter + '_>, Error>;
 }
 
 /// What a command run produced, for `main` to print and exit with.
@@ -81,6 +84,15 @@ struct Cli {
 enum Command {
     /// Check this repo's setup before a fan-out: tools, credentials and the lane host
     Doctor,
+    /// Write this repo's bli.toml by answering a few questions
+    Init {
+        /// Replace an existing bli.toml, once every question is answered
+        #[arg(long)]
+        force: bool,
+        /// Ask nothing: write the defaults, for GitHub Issues and herdr
+        #[arg(long, short)]
+        yes: bool,
+    },
     /// List the tickets under a parent that can be started now
     Frontier {
         /// The parent ticket; defaults to `[tracker] parent` in bli.toml
@@ -184,6 +196,10 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
     if let Command::Doctor = cli.command {
         return Ok(commands::doctor(&doctor_checks(cwd, providers), cli.json));
     }
+    // Init writes the bli.toml every other command needs.
+    if let Command::Init { force, yes } = cli.command {
+        return init::run(cwd, providers, init::Options { force, yes }).map(Into::into);
+    }
     let config = Config::load(cwd)?;
     let git = Git::open(cwd)?;
     match &cli.command {
@@ -221,7 +237,7 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
                 cli.json,
             )
         }
-        Command::Doctor => unreachable!("handled above"),
+        Command::Doctor | Command::Init { .. } => unreachable!("handled above"),
         Command::Lane(LaneCommand::List) => {
             let host = providers.lane_host(&config)?;
             let code = providers.code_host(&config)?;

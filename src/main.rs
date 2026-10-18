@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -10,6 +10,7 @@ use bli::git::Git;
 use bli::github::GitHub;
 use bli::herdr::Herdr;
 use bli::host::LaneHost;
+use bli::init::{self, Prompter};
 use bli::process::{ProcessRunner, SystemRunner};
 use bli::superset::Superset;
 use bli::tracker::IssueTracker;
@@ -63,6 +64,15 @@ impl Providers for System {
 
     fn git_runner(&self) -> &dyn ProcessRunner {
         &SystemRunner
+    }
+
+    /// The prompts read keys from stdin and draw on stderr, so both must be a terminal.
+    fn prompter(&self) -> Result<Box<dyn Prompter + '_>, Error> {
+        if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+            Ok(Box::new(init::Terminal))
+        } else {
+            Err(init::not_a_terminal())
+        }
     }
 }
 

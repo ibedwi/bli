@@ -95,7 +95,7 @@ impl Config {
     pub fn load(cwd: &Path) -> Result<Config, Error> {
         let path = find(cwd).ok_or_else(|| {
             Error::new(format!("no {FILE_NAME} found in this repo")).with_hint(format!(
-                "create {FILE_NAME} at the repo root with at least:\n\n[tracker]\nkind = \"github\""
+                "run `bli init` to write one, or create {FILE_NAME} at the repo root with at least:\n\n[tracker]\nkind = \"github\""
             ))
         })?;
         let text = std::fs::read_to_string(&path)
@@ -115,6 +115,7 @@ impl Config {
                 "bli.toml needs a [tracker] table naming its kind, e.g. kind = \"github\"",
             )
         })?;
+        check_base(&config.lane.base).map_err(|why| invalid(&why))?;
         if config.tracker.kind == TrackerKind::Clickup && config.tracker.clickup.is_none() {
             return Err(
                 invalid("`kind = \"clickup\"` needs a [tracker.clickup] table")
@@ -129,6 +130,28 @@ impl Config {
             })?;
         }
         Ok(config)
+    }
+}
+
+/// Checks `[lane] base` against the branch names git accepts (`git check-ref-format --branch`),
+/// short of asking git.
+pub fn check_base(base: &str) -> Result<(), String> {
+    let refused = base.is_empty()
+        || base.starts_with(['-', '/'])
+        || base.ends_with(['/', '.'])
+        || base.ends_with(".lock")
+        || base.contains("..")
+        || base.contains("//")
+        || base.contains("@{")
+        || base == "@"
+        || base.split('/').any(|part| part.starts_with('.'))
+        || base
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(c));
+    if refused {
+        Err(format!("base `{base}` is not a branch name git accepts"))
+    } else {
+        Ok(())
     }
 }
 
