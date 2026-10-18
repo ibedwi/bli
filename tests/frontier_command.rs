@@ -246,3 +246,58 @@ fn frontier_leaves_out_tickets_that_already_have_a_lane() {
         ])
     );
 }
+
+const CLICKUP: &str = "[tracker]\nkind = \"clickup\"\nparent = \"86parent\"\n\n[tracker.clickup]\nworkspace_id = \"9001\"\nlist_id = \"901\"\n";
+
+#[test]
+fn a_clickup_tracker_falls_back_to_its_configured_parent_task() {
+    let repo = repo(Some(CLICKUP));
+    let fakes =
+        with_tracker(FakeTracker::default().with_frontier("86parent", &[("86abc", "Fan-out")]));
+
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+    assert_eq!(json(&out)["parent"], "86parent");
+    assert_eq!(json(&out)["tickets"][0]["id"], "86abc");
+}
+
+#[test]
+fn a_clickup_tracker_without_its_settings_fails_with_a_hint() {
+    let repo = repo(Some("[tracker]\nkind = \"clickup\"\n"));
+    let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+    let out = bli(&["frontier", "--parent", "86parent"], repo.path(), &fakes);
+
+    assert_ne!(out.code, 0);
+    assert!(out.stderr.contains("[tracker.clickup]"), "{}", out.stderr);
+    assert!(out.stderr.contains("hint:"), "{}", out.stderr);
+    assert!(out.stderr.contains("workspace_id"), "{}", out.stderr);
+}
+
+#[test]
+fn a_clickup_token_in_bli_toml_is_refused() {
+    let repo = repo(Some(&format!("{CLICKUP}token = \"pk_secret\"\n")));
+    let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+    assert_ne!(out.code, 0);
+    assert!(out.stderr.contains("token"), "{}", out.stderr);
+    assert!(out.stderr.contains("CLICKUP_API_TOKEN"), "{}", out.stderr);
+}
+
+#[test]
+fn clickup_ids_may_be_written_as_bare_numbers() {
+    let repo = repo(Some(
+        "[tracker]\nkind = \"clickup\"\n\n[tracker.clickup]\nworkspace_id = 9001\nlist_id = 901\nspace_id = 55\n",
+    ));
+    let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+    let out = bli(
+        &["frontier", "--parent", "86parent", "--json"],
+        repo.path(),
+        &fakes,
+    );
+
+    assert_eq!(json(&out)["tickets"], json!([]));
+}

@@ -1,5 +1,6 @@
 pub mod branch;
 pub mod check;
+pub mod clickup;
 pub mod code_host;
 pub mod config;
 pub mod error;

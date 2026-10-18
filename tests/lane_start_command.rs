@@ -365,3 +365,26 @@ fn lane_start_exits_zero_when_lanes_are_only_skipped() {
     assert_eq!(json(&out)["lanes"][0]["outcome"], "skipped");
     assert_eq!(out.stderr, "");
 }
+
+#[test]
+fn lane_start_names_a_clickup_lane_after_its_native_task_id() {
+    let repo = Repo::new(
+        "[lane]\nbranch = \"cu/{id}/{slug}\"\n\n[tracker]\nkind = \"clickup\"\n\n[tracker.clickup]\nworkspace_id = \"9001\"\n",
+    );
+    let fakes = fakes(&[("86c1x2y3z", "Book the venue")]);
+
+    let out = bli(
+        &["lane", "start", "86c1x2y3z", "--json"],
+        repo.path(),
+        &fakes,
+    );
+
+    assert_eq!(
+        json(&out)["lanes"][0]["branch"],
+        "cu/86c1x2y3z/book-the-venue"
+    );
+    assert_eq!(fakes.tracker.claimed(), vec!["86c1x2y3z"]);
+    // The lane is found again by parsing the ID back out of its branch.
+    let list = bli(&["lane", "list", "--json"], repo.path(), &fakes);
+    assert_eq!(json(&list)["lanes"][0]["ticket"], "86c1x2y3z");
+}
