@@ -246,3 +246,104 @@ fn frontier_leaves_out_tickets_that_already_have_a_lane() {
         ])
     );
 }
+
+const CLICKUP: &str = "[tracker]\nkind = \"clickup\"\nparent = \"86parent\"\n\n[tracker.clickup]\nworkspace_id = \"9001\"\nlist_id = \"901\"\n";
+
+#[test]
+fn a_clickup_tracker_falls_back_to_its_configured_parent_task() {
+    let repo = repo(Some(CLICKUP));
+    let fakes =
+        with_tracker(FakeTracker::default().with_frontier("86parent", &[("86abc", "Fan-out")]));
+
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+    assert_eq!(json(&out)["parent"], "86parent");
+    assert_eq!(json(&out)["tickets"][0]["id"], "86abc");
+}
+
+#[test]
+fn a_clickup_tracker_without_its_settings_fails_with_a_hint() {
+    let repo = repo(Some("[tracker]\nkind = \"clickup\"\n"));
+    let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+    let out = bli(&["frontier", "--parent", "86parent"], repo.path(), &fakes);
+
+    assert_ne!(out.code, 0);
+    assert!(out.stderr.contains("[tracker.clickup]"), "{}", out.stderr);
+    assert!(out.stderr.contains("hint:"), "{}", out.stderr);
+    assert!(out.stderr.contains("workspace_id"), "{}", out.stderr);
+}
+
+#[test]
+fn a_clickup_token_in_bli_toml_is_refused() {
+    let repo = repo(Some(&format!("{CLICKUP}token = \"pk_secret\"\n")));
+    let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+    let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+    assert_ne!(out.code, 0);
+    assert!(out.stderr.contains("token"), "{}", out.stderr);
+    assert!(out.stderr.contains("CLICKUP_API_TOKEN"), "{}", out.stderr);
+}
+
+fn with_api_base(base: &str) -> String {
+    format!("{CLICKUP}api_base = \"{base}\"\n")
+}
+
+#[test]
+fn a_clickup_api_base_may_be_https_anywhere_or_plain_http_to_this_machine() {
+    for base in [
+        "https://api.clickup.com/api/v2",
+        "HTTPS://proxy.example/clickup/api/v2",
+        "http://127.0.0.1:8080",
+        "http://localhost:9/api/v2",
+        "http://[::1]:9",
+    ] {
+        let repo = repo(Some(&with_api_base(base)));
+        let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+        let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+        assert_eq!(out.code, 0, "{base}: {}", out.stderr);
+    }
+}
+
+#[test]
+fn a_clickup_api_base_that_would_send_the_token_in_cleartext_or_with_credentials_is_refused() {
+    for base in [
+        "http://api.clickup.com/api/v2",
+        "http://localhost.attacker.test/api/v2",
+        "http://127.0.0.1.attacker.test",
+        "http://127.0.0.1@attacker.test/api/v2",
+        "https://user:pass@api.clickup.com/api/v2",
+        "ftp://api.clickup.com/api/v2",
+        "api.clickup.com/api/v2",
+        "https://",
+    ] {
+        let repo = repo(Some(&with_api_base(base)));
+        let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+        let out = bli(&["frontier", "--json"], repo.path(), &fakes);
+
+        assert_ne!(out.code, 0, "{base} was accepted");
+        assert!(out.stderr.contains("api_base"), "{base}: {}", out.stderr);
+        assert!(out.stderr.contains("hint:"), "{base}: {}", out.stderr);
+        assert!(out.stdout.is_empty(), "{base}: {}", out.stdout);
+    }
+}
+
+#[test]
+fn clickup_ids_may_be_written_as_bare_numbers() {
+    let repo = repo(Some(
+        "[tracker]\nkind = \"clickup\"\n\n[tracker.clickup]\nworkspace_id = 9001\nlist_id = 901\nspace_id = 55\n",
+    ));
+    let fakes = with_tracker(FakeTracker::default().with_frontier("86parent", &[]));
+
+    let out = bli(
+        &["frontier", "--parent", "86parent", "--json"],
+        repo.path(),
+        &fakes,
+    );
+
+    assert_eq!(json(&out)["tickets"], json!([]));
+}

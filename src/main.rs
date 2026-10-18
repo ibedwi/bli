@@ -1,9 +1,12 @@
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use bli::clickup::{self, ClickUp};
 use bli::code_host::CodeHost;
 use bli::config::{Config, HostKind, TrackerKind};
 use bli::error::Error;
+use bli::git::Git;
 use bli::github::GitHub;
 use bli::herdr::Herdr;
 use bli::host::LaneHost;
@@ -12,16 +15,26 @@ use bli::superset::Superset;
 use bli::tracker::IssueTracker;
 use bli::Providers;
 
-/// The providers backed by real tools.
-struct System;
+/// The providers backed by real tools, for a `bli` run from `cwd`.
+struct System {
+    cwd: PathBuf,
+}
 
 impl Providers for System {
     fn issue_tracker(&self, config: &Config) -> Result<Box<dyn IssueTracker + '_>, Error> {
         match config.tracker.kind {
             TrackerKind::Github => Ok(Box::new(GitHub::new(SystemRunner))),
             TrackerKind::Clickup => {
-                Err(Error::new("the ClickUp issue tracker is not supported yet")
-                    .with_hint("set `kind = \"github\"` under [tracker] in bli.toml"))
+                let settings = config.tracker.clickup.as_ref().ok_or_else(|| {
+                    Error::new("`kind = \"clickup\"` needs a [tracker.clickup] table")
+                })?;
+                let main = Git::open(&self.cwd).ok();
+                let token = clickup::find_token(
+                    std::env::var(clickup::TOKEN_VAR).ok(),
+                    checkout_root(&self.cwd),
+                    main.as_ref().map(Git::main_checkout),
+                );
+                Ok(Box::new(ClickUp::new(settings, token)))
             }
         }
     }
@@ -53,6 +66,11 @@ impl Providers for System {
     }
 }
 
+/// The root of the checkout containing `dir`: the nearest directory holding `.git`.
+fn checkout_root(dir: &Path) -> Option<&Path> {
+    dir.ancestors().find(|d| d.join(".git").exists())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -63,7 +81,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let out = bli::run(&args, &cwd, &System);
+    let out = bli::run(&args, &cwd, &System { cwd: cwd.clone() });
     let _ = std::io::stdout().write_all(out.stdout.as_bytes());
     let _ = std::io::stderr().write_all(out.stderr.as_bytes());
     ExitCode::from(out.code as u8)
