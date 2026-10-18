@@ -1,6 +1,6 @@
 //! The issue tracker interface. The command layer depends only on this.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::check::Check;
 use crate::error::Error;
@@ -22,6 +22,18 @@ pub struct TicketDetails {
     pub claimed_by: Vec<String>,
 }
 
+/// What happens to a lane's ticket once its pull request is merged, as `on_merge` in `bli.toml`
+/// writes it: `"close"`, `"none"`, or `{ status = "..." }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnMerge {
+    #[default]
+    Close,
+    None,
+    /// Moves the ticket to the named status.
+    Status(String),
+}
+
 pub trait IssueTracker {
     /// The child tickets of `parent` that are open, have no open blockers and are unclaimed.
     fn frontier(&self, parent: &str) -> Result<Vec<Ticket>, Error>;
@@ -35,6 +47,9 @@ pub trait IssueTracker {
     /// The body for a pull request shipping ticket `id`, given the `body` written for it:
     /// on a tracker that reads pull requests, one that closes the ticket on merge.
     fn pr_body(&self, id: &str, body: &str) -> Result<String, Error>;
+
+    /// Applies `action` to ticket `id`, whose pull request was merged. Safe to repeat.
+    fn on_merge(&self, id: &str, action: &OnMerge) -> Result<(), Error>;
 
     /// Checks the tracker's tools and credentials, for `bli doctor`.
     fn checks(&self) -> Vec<Check>;
@@ -55,6 +70,10 @@ impl<T: IssueTracker + ?Sized> IssueTracker for &T {
 
     fn pr_body(&self, id: &str, body: &str) -> Result<String, Error> {
         (**self).pr_body(id, body)
+    }
+
+    fn on_merge(&self, id: &str, action: &OnMerge) -> Result<(), Error> {
+        (**self).on_merge(id, action)
     }
 
     fn checks(&self) -> Vec<Check> {

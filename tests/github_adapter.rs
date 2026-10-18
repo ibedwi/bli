@@ -10,7 +10,7 @@ use bli::check::CheckStatus;
 use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::github::GitHub;
 use bli::process::{Output, ProcessRunner};
-use bli::tracker::{IssueTracker, Ticket, TicketDetails};
+use bli::tracker::{IssueTracker, OnMerge, Ticket, TicketDetails};
 
 /// Records every command it is asked to run and answers with a canned output,
 /// or with each of a sequence of outputs in turn.
@@ -222,6 +222,63 @@ fn claim_reports_gh_failure_with_its_stderr() {
 }
 
 #[test]
+fn on_merge_close_closes_an_open_issue() {
+    let runner =
+        FakeRunner::replying("").then_in_turn(vec![output(true, r#"{"state":"OPEN"}"#, "")]);
+    GitHub::new(&runner)
+        .on_merge("#6", &OnMerge::Close)
+        .unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![
+            vec!["gh", "issue", "view", "6", "--json", "state"],
+            vec!["gh", "issue", "close", "6"],
+        ]
+    );
+}
+
+#[test]
+fn on_merge_close_does_nothing_when_the_pr_already_closed_the_issue() {
+    let runner = FakeRunner::replying(r#"{"state":"CLOSED"}"#);
+    GitHub::new(&runner).on_merge("6", &OnMerge::Close).unwrap();
+    assert_eq!(
+        runner.calls(),
+        vec![vec!["gh", "issue", "view", "6", "--json", "state"]]
+    );
+}
+
+#[test]
+fn on_merge_none_leaves_the_issue_without_calling_gh() {
+    let runner = FakeRunner::replying("");
+    GitHub::new(&runner).on_merge("6", &OnMerge::None).unwrap();
+    assert_eq!(runner.calls(), Vec::<Vec<String>>::new());
+}
+
+#[test]
+fn on_merge_status_is_refused_since_github_issues_have_no_status() {
+    let runner = FakeRunner::replying("");
+    let err = GitHub::new(&runner)
+        .on_merge("6", &OnMerge::Status("review".into()))
+        .unwrap_err();
+    assert!(err.to_string().contains("review"), "{err}");
+    assert!(err.hint().unwrap().contains("on_merge"), "{err:?}");
+    assert_eq!(runner.calls(), Vec::<Vec<String>>::new());
+}
+
+#[test]
+fn on_merge_close_reports_gh_failure_with_its_stderr() {
+    let runner = FakeRunner::with(Ok(output(
+        false,
+        "",
+        "GraphQL: Could not resolve to an issue",
+    )));
+    let err = GitHub::new(&runner)
+        .on_merge("6", &OnMerge::Close)
+        .unwrap_err();
+    assert!(err.to_string().contains("Could not resolve"), "{err}");
+}
+
+#[test]
 fn pr_body_adds_a_closing_reference_so_merging_closes_the_ticket() {
     let runner = FakeRunner::replying("");
     let body = GitHub::new(&runner)
@@ -287,7 +344,7 @@ fn push_reports_git_failure_with_its_stderr() {
 fn find_pr_lists_the_head_branchs_prs_in_any_state() {
     let runner = FakeRunner::replying(&fixture("pr_list_merged.json"));
     let pr = GitHub::new(&runner)
-        .find_pr("ticket/3-fan-out-on-herdr")
+        .find_pr("ticket/4-remove-lane-lane-inspect-lane-rm")
         .unwrap();
     assert_eq!(
         runner.calls(),
@@ -296,11 +353,11 @@ fn find_pr_lists_the_head_branchs_prs_in_any_state() {
             "pr",
             "list",
             "--head",
-            "ticket/3-fan-out-on-herdr",
+            "ticket/4-remove-lane-lane-inspect-lane-rm",
             "--state",
             "all",
             "--json",
-            "number,url,state,createdAt",
+            "number,url,state,createdAt,headRefOid",
             "--limit",
             "100",
         ]]
@@ -308,9 +365,10 @@ fn find_pr_lists_the_head_branchs_prs_in_any_state() {
     assert_eq!(
         pr,
         Some(PullRequest {
-            number: 12,
-            url: "https://github.com/ibedwi/bli/pull/12".into(),
+            number: 15,
+            url: "https://github.com/ibedwi/bli/pull/15".into(),
             state: PrState::Merged,
+            head_sha: Some("388516324bb6e4f9d30d6a98bd3082d47d1728a1".into()),
         })
     );
 }
@@ -365,6 +423,7 @@ fn open_pr_creates_the_pr_against_the_base_and_reads_its_url() {
             number: 13,
             url: "https://github.com/ibedwi/bli/pull/13".into(),
             state: PrState::Open,
+            head_sha: None,
         }
     );
 }

@@ -15,7 +15,7 @@ use bli::config::Config;
 use bli::error::Error;
 use bli::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
 use bli::process::{Output, ProcessRunner};
-use bli::tracker::{IssueTracker, Ticket, TicketDetails};
+use bli::tracker::{IssueTracker, OnMerge, Ticket, TicketDetails};
 use bli::{Outcome, Providers};
 use tempfile::TempDir;
 
@@ -25,6 +25,7 @@ pub struct FakeTracker {
     frontiers: HashMap<String, Vec<Ticket>>,
     tickets: HashMap<String, TicketDetails>,
     claimed: RefCell<Vec<String>>,
+    on_merged: RefCell<Vec<(String, OnMerge)>>,
     checks: Vec<Check>,
 }
 
@@ -57,6 +58,11 @@ impl FakeTracker {
     pub fn with_check(mut self, check: Check) -> Self {
         self.checks.push(check);
         self
+    }
+
+    /// Every on-merge action applied so far, as (ticket ID, action), in order.
+    pub fn on_merged(&self) -> Vec<(String, OnMerge)> {
+        self.on_merged.borrow().clone()
     }
 
     /// The ticket IDs claimed so far, in order.
@@ -98,6 +104,13 @@ impl IssueTracker for FakeTracker {
         Ok(format!("{body}[closes {id}]\n"))
     }
 
+    fn on_merge(&self, id: &str, action: &OnMerge) -> Result<(), Error> {
+        self.on_merged
+            .borrow_mut()
+            .push((id.to_string(), action.clone()));
+        Ok(())
+    }
+
     fn checks(&self) -> Vec<Check> {
         self.checks.clone()
     }
@@ -120,6 +133,14 @@ impl FakeCodeHost {
         self
     }
 
+    /// Adds merged PR `number` from branch `head`, whose last commit was `sha`.
+    pub fn with_merged_pr_at(self, head: &str, number: u64, sha: &str) -> Self {
+        let mut merged = pr(number, PrState::Merged);
+        merged.head_sha = Some(sha.to_string());
+        self.prs.borrow_mut().push((head.to_string(), merged));
+        self
+    }
+
     /// Every push, as (repo, branch).
     pub fn pushed(&self) -> Vec<(PathBuf, String)> {
         self.pushed.borrow().clone()
@@ -135,6 +156,7 @@ pub fn pr(number: u64, state: PrState) -> PullRequest {
         number,
         url: format!("https://code.test/pull/{number}"),
         state,
+        head_sha: None,
     }
 }
 

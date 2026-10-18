@@ -6,6 +6,7 @@ use serde::{Deserialize, Deserializer};
 
 use crate::branch::BranchPattern;
 use crate::error::Error;
+use crate::tracker::OnMerge;
 
 pub const FILE_NAME: &str = "bli.toml";
 
@@ -52,6 +53,9 @@ pub struct TrackerConfig {
     /// The default parent ticket for `bli frontier`.
     #[serde(default, deserialize_with = "ticket_id")]
     pub parent: Option<String>,
+    /// What happens to a ticket once its lane's pull request is merged.
+    #[serde(default)]
+    pub on_merge: OnMerge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

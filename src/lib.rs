@@ -141,6 +141,9 @@ enum LaneCommand {
         #[arg(long)]
         delete_branch: bool,
     },
+    /// Remove every lane whose PR was merged, apply the on-merge action to its ticket,
+    /// and fast-forward the main checkout when it is on the lane's base
+    Clean,
 }
 
 /// Runs `bli` with `args` (without the program name) from `cwd`.
@@ -278,6 +281,20 @@ fn dispatch(cli: &Cli, cwd: &Path, providers: &dyn Providers) -> Result<commands
                 delete_branch: *delete_branch,
             };
             commands::lane_rm(host.as_ref(), &git, &config, cwd, &request, cli.json)
+        }
+        Command::Lane(LaneCommand::Clean) => {
+            let tracker = providers.issue_tracker(&config)?;
+            let host = providers.lane_host(&config)?;
+            let code = providers.code_host(&config)?;
+            commands::lane_clean(
+                tracker.as_ref(),
+                host.as_ref(),
+                code.as_ref(),
+                &git,
+                &config,
+                cwd,
+                cli.json,
+            )
         }
     }
 }
