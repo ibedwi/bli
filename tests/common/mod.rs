@@ -14,6 +14,7 @@ use bli::code_host::{CodeHost, NewPullRequest, PrState, PullRequest};
 use bli::config::Config;
 use bli::error::Error;
 use bli::host::{CreatedLane, HostCheckout, LaneHost, NewLane, StatusHint};
+use bli::init::{Cancelled, Choice, Prompter, Validator};
 use bli::process::{Output, ProcessRunner};
 use bli::tracker::{IssueTracker, OnMerge, Ticket, TicketDetails};
 use bli::{Outcome, Providers};
@@ -518,6 +519,8 @@ pub struct Fakes {
     pub git: FakeGit,
     /// Makes building the issue tracker fail, as for a tracker `bli` does not support yet.
     pub tracker_unsupported: bool,
+    /// Answers `bli init`'s questions; without one, `bli` runs as if not in a terminal.
+    pub prompter: Option<ScriptedPrompter>,
 }
 
 impl Providers for Fakes {
@@ -538,6 +541,159 @@ impl Providers for Fakes {
 
     fn git_runner(&self) -> &dyn ProcessRunner {
         &self.git
+    }
+
+    fn prompter(&self) -> Result<Box<dyn Prompter + '_>, Error> {
+        match &self.prompter {
+            Some(prompter) => Ok(Box::new(prompter)),
+            None => Err(bli::init::not_a_terminal()),
+        }
+    }
+}
+
+/// One scripted reply to a `bli init` question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// Presses enter: takes the default.
+    Enter,
+    /// Picks the choice with this value.
+    Pick(&'static str),
+    /// Types this text and presses enter.
+    Type(&'static str),
+    Yes,
+    No,
+    /// Presses Esc or Ctrl-C.
+    Cancel,
+}
+
+/// A question and the choices it offered, as (value, hint).
+type Offered = (String, Vec<(String, String)>);
+
+/// Plays back answers in order, and like the real prompts, re-asks a question whose
+/// answer the validator rejects, recording the rejection.
+pub struct ScriptedPrompter {
+    answers: RefCell<std::collections::VecDeque<Answer>>,
+    asked: RefCell<Vec<String>>,
+    rejections: RefCell<Vec<String>>,
+    printed: RefCell<Vec<String>>,
+    offered: RefCell<Vec<Offered>>,
+}
+
+impl ScriptedPrompter {
+    pub fn new(answers: &[Answer]) -> Self {
+        ScriptedPrompter {
+            answers: RefCell::new(answers.iter().cloned().collect()),
+            asked: RefCell::new(Vec::new()),
+            rejections: RefCell::new(Vec::new()),
+            printed: RefCell::new(Vec::new()),
+            offered: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Every question asked, in order, re-asks included.
+    pub fn asked(&self) -> Vec<String> {
+        self.asked.borrow().clone()
+    }
+
+    /// Every validation error shown, in order.
+    pub fn rejections(&self) -> Vec<String> {
+        self.rejections.borrow().clone()
+    }
+
+    /// Everything shown besides questions: the intro, notes and the outro.
+    pub fn printed(&self) -> Vec<String> {
+        self.printed.borrow().clone()
+    }
+
+    /// The choices a question offered, as (value, hint), the last time it was asked.
+    pub fn offered(&self, prompt: &str) -> Vec<(String, String)> {
+        let offered = self.offered.borrow();
+        let found = offered.iter().rev().find(|(p, _)| p == prompt);
+        found
+            .unwrap_or_else(|| panic!("{prompt:?} was not asked"))
+            .1
+            .clone()
+    }
+
+    /// The answers left unused.
+    pub fn unused(&self) -> Vec<Answer> {
+        self.answers.borrow().iter().cloned().collect()
+    }
+
+    fn next(&self, prompt: &str) -> Answer {
+        self.asked.borrow_mut().push(prompt.to_string());
+        self.answers
+            .borrow_mut()
+            .pop_front()
+            .unwrap_or_else(|| panic!("no answer left for {prompt:?}"))
+    }
+}
+
+impl Prompter for ScriptedPrompter {
+    fn intro(&self, title: &str) {
+        self.printed.borrow_mut().push(title.to_string());
+    }
+
+    fn select(
+        &self,
+        prompt: &str,
+        choices: &[Choice],
+        default: &str,
+    ) -> Result<&'static str, Cancelled> {
+        let offered = choices
+            .iter()
+            .map(|c| (c.value.to_string(), c.hint.to_string()))
+            .collect();
+        self.offered
+            .borrow_mut()
+            .push((prompt.to_string(), offered));
+        let wanted = match self.next(prompt) {
+            Answer::Enter => default.to_string(),
+            Answer::Pick(value) => value.to_string(),
+            Answer::Cancel => return Err(Cancelled),
+            other => panic!("{prompt:?} is a choice, not {other:?}"),
+        };
+        let found = choices.iter().find(|c| c.value == wanted);
+        Ok(found
+            .unwrap_or_else(|| panic!("{prompt:?} has no choice {wanted:?}"))
+            .value)
+    }
+
+    fn input(&self, prompt: &str, default: &str, validate: Validator) -> Result<String, Cancelled> {
+        loop {
+            let value = match self.next(prompt) {
+                Answer::Enter => default.to_string(),
+                Answer::Type(text) => text.to_string(),
+                Answer::Cancel => return Err(Cancelled),
+                other => panic!("{prompt:?} takes text, not {other:?}"),
+            };
+            match validate(&value) {
+                Ok(()) => return Ok(value),
+                Err(why) => self.rejections.borrow_mut().push(why),
+            }
+        }
+    }
+
+    fn confirm(&self, prompt: &str, default: bool) -> Result<bool, Cancelled> {
+        match self.next(prompt) {
+            Answer::Enter => Ok(default),
+            Answer::Yes => Ok(true),
+            Answer::No => Ok(false),
+            Answer::Cancel => Err(Cancelled),
+            other => panic!("{prompt:?} is yes or no, not {other:?}"),
+        }
+    }
+
+    fn note(&self, title: &str, body: &str) {
+        self.printed.borrow_mut().push(format!("{title}\n{body}"));
+    }
+
+    fn outro(&self, message: &str) {
+        self.printed.borrow_mut().push(message.to_string());
+    }
+
+    fn outro_cancel(&self, message: &str) {
+        self.printed.borrow_mut().push(message.to_string());
     }
 }
 

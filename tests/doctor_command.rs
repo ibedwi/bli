@@ -139,10 +139,12 @@ fn doctor_warns_on_a_missing_bli_toml_and_still_checks_git() {
     assert_eq!(checks[1]["name"], "bli.toml");
     assert_eq!(checks[1]["status"], "warn");
     assert_eq!(checks[1]["detail"], "no bli.toml found in this repo");
+    let hint = checks[1]["hint"].as_str().unwrap();
     assert!(
-        checks[1]["hint"].as_str().unwrap().contains("[tracker]"),
-        "{checks:?}"
+        hint.starts_with("run `bli init` to write one, or "),
+        "{hint}"
     );
+    assert!(hint.contains("[tracker]"), "{hint}");
 }
 
 #[test]
@@ -162,5 +164,23 @@ fn doctor_indents_every_line_of_a_multi_line_hint() {
         out.stdout,
         "pass  git  git version 2.51.0\n\
          warn  host  not set up\n      hint: add this:\n\n      [host]\n      kind = \"x\"\n"
+    );
+}
+
+#[test]
+fn doctor_warns_on_a_base_that_is_not_a_branch_name() {
+    let repo = Repo::new("[lane]\nbase = \"release 2\"\n\n[tracker]\nkind = \"github\"\n");
+
+    let out = bli(&["doctor", "--json"], repo.path(), &Fakes::default());
+
+    let checks: serde_json::Value = serde_json::from_str(&out.stdout).unwrap();
+    assert_eq!(checks["checks"][1]["name"], "bli.toml");
+    assert_eq!(checks["checks"][1]["status"], "warn");
+    assert_eq!(
+        checks["checks"][1]["detail"],
+        format!(
+            "invalid {}: base `release 2` is not a branch name git accepts",
+            repo.path().join("bli.toml").display()
+        )
     );
 }

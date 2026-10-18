@@ -19,7 +19,17 @@ npx skills add ibedwi/bli -s fan-out -s fan-in -s remove-lane
 
 ## Configure
 
-Each repo commits a `bli.toml` at its root:
+Each repo commits a `bli.toml` at its root. `bli init` writes one by asking a few questions in the terminal:
+
+```sh
+bli init            # pick the lane host and issue tracker, then confirm each setting
+bli init --yes      # ask nothing: write the defaults below, for GitHub Issues and herdr
+bli init --force    # replace an existing bli.toml, once every question is answered
+```
+
+It asks for the lane host (herdr or Superset), the issue tracker (GitHub Issues or ClickUp), ClickUp's workspace ID and optional list and space IDs, an optional default parent ticket (an issue number such as `12` or `#12` on GitHub; a task ID or task URL on ClickUp), what happens to a ticket when its pull request merges (on ClickUp, also moving it to a named status), and the lane base, branch pattern and agent prompt, each with its default. Answers are checked with the same rules `bli.toml` is loaded with, and a refused answer is asked again with the reason. It then shows the file and asks before writing it. It writes at the root of the git checkout it runs in, even from a subdirectory, refuses to run outside a git checkout, and refuses an existing `bli.toml` unless given `--force`. Esc or Ctrl-C at any question, or declining the write, leaves no file. It never asks for an API token, makes no network calls and needs no lane host running. Without a terminal it fails at once instead of waiting for answers; use `--yes` there. `--yes` covers only the GitHub Issues and herdr defaults: for ClickUp or Superset, run it in a terminal or edit the file.
+
+The full format:
 
 ```toml
 [lane]                              # optional; these are the defaults
@@ -58,6 +68,7 @@ The API token is never read from `bli.toml`, which refuses one. `bli` takes it f
 
 ## Commands
 
+- `bli init [--yes] [--force]`: writes this repo's `bli.toml` from a short interview in the terminal; see [Configure](#configure). On success, prints what to do next: set `CLICKUP_API_TOKEN` for ClickUp, then run `bli doctor`. `--yes` writes the defaults without asking and prints `wrote <path>`.
 - `bli doctor [--json]`: checks this repo's setup before a fan-out and reports each check as `pass` or `warn`: `git` is installed, then the issue tracker's checks (on GitHub: `gh` is installed and `gh auth status` succeeds; on ClickUp: `clickup token`, that a token was found and where, and `clickup auth`, that ClickUp accepts it and it can see `workspace_id`), then the lane host's (on herdr: `herdr` is installed, and the permission-mode check, which passes when the herdr server is running, since `bli` passes `--permission-mode bypassPermissions` itself; on Superset: `superset` is installed, its host service is running, and the permission-mode check, which passes when the first Claude agent preset launches with `--dangerously-skip-permissions` or `--permission-mode bypassPermissions`). A missing or invalid `bli.toml` is a `warn` too, and then only `git` is checked, since there is no tracker or host to check. `--json` prints `{"checks": [{"name", "status", "detail", "hint"}]}`, with `hint` left out when there is none. When any check warns, `doctor` still prints every check, then exits 1 with a summary on stderr.
 - `bli frontier [--parent <id>] [--json]`: the tickets under a parent that are open, unblocked, unclaimed and have no lane. `--json` prints `{"parent": "<id>", "tickets": [{"id", "title", "url"}]}`.
 - `bli lane start <id>... [--base <branch>] [--slug <slug>] [--json]`: from inside the lane host, fetches `origin`, then for each ticket in turn creates a lane on a new branch from `origin/<base>`, records the base as `git config branch.<branch>.bliBase`, starts Claude with the configured prompt (in bypass-permissions mode on herdr; through its Claude agent preset on Superset), and claims the ticket. Tickets with a lane or a claim are skipped. The slug is the first five words of the title in kebab-case; `--slug` overrides it for a single ticket. `--json` prints `{"base", "lanes": [{"ticket", "title", "url", "outcome", "branch", "base", "path", "workspace", "status", "reason", "error"}]}`, where `outcome` is `started`, `skipped` or `failed` and absent fields are left out. One lane failing doesn't stop the rest. When any lane fails, `lane start` still prints every lane's outcome on stdout, then exits 1 with a summary on stderr; skipped lanes are not failures.
@@ -72,4 +83,4 @@ The API token is never read from `bli.toml`, which refuses one. `bli` takes it f
 
 Pull requests live on GitHub, through `gh`, whichever issue tracker holds the tickets. `bli` never merges a pull request: merging is the developer's decision.
 
-Errors go to stderr with a non-zero exit. `bli` never prompts.
+Errors go to stderr with a non-zero exit. Apart from `bli init`, `bli` never prompts.
