@@ -9,6 +9,7 @@ pub mod github;
 pub mod herdr;
 pub mod host;
 pub mod process;
+pub mod superset;
 pub mod tracker;
 
 mod commands;

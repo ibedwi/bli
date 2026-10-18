@@ -1,0 +1,2 @@
+Error: Not logged in
+Hint: Run: superset auth login (or set SUPERSET_API_KEY)

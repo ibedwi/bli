@@ -26,6 +26,15 @@ impl StatusHint {
             StatusHint::Unknown => "unknown",
         }
     }
+
+    /// The status most in need of attention among a workspace's agents, or unknown with none.
+    pub fn most_urgent(statuses: impl IntoIterator<Item = StatusHint>) -> StatusHint {
+        let statuses: Vec<_> = statuses.into_iter().collect();
+        [StatusHint::Blocked, StatusHint::Working, StatusHint::Idle]
+            .into_iter()
+            .find(|s| statuses.contains(s))
+            .unwrap_or(StatusHint::Unknown)
+    }
 }
 
 /// One checkout the host knows about, whether or not it is a lane.
@@ -78,8 +87,14 @@ pub trait LaneHost {
         prompt: &str,
     ) -> Result<StatusHint, Error>;
 
-    /// The last `lines` lines of output from ticket `ticket_id`'s agent.
-    fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error>;
+    /// The last `lines` lines of output from ticket `ticket_id`'s agent, in the lane
+    /// whose workspace is `workspace` when one is open.
+    fn read_agent(
+        &self,
+        ticket_id: &str,
+        workspace: Option<&str>,
+        lines: u32,
+    ) -> Result<String, Error>;
 
     /// Every checkout of the repo whose main checkout is `repo`, as the host sees them now.
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error>;
@@ -124,8 +139,13 @@ impl<T: LaneHost + ?Sized> LaneHost for &T {
         (**self).start_agent(lane, ticket_id, prompt)
     }
 
-    fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error> {
-        (**self).read_agent(ticket_id, lines)
+    fn read_agent(
+        &self,
+        ticket_id: &str,
+        workspace: Option<&str>,
+        lines: u32,
+    ) -> Result<String, Error> {
+        (**self).read_agent(ticket_id, workspace, lines)
     }
 
     fn list(&self, repo: &Path) -> Result<Vec<HostCheckout>, Error> {
