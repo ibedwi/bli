@@ -1,0 +1,30 @@
+[
+  {
+    "id": "8c1e4a7b-0d3f-4a6e-9b2c-5d8f1e0a3b67",
+    "presetId": "claude",
+    "iconId": null,
+    "label": "Claude",
+    "command": "claude",
+    "args": ["--dangerously-skip-permissions"],
+    "promptTransport": "argv",
+    "promptArgs": [],
+    "resumeArgs": ["--resume"],
+    "forkArgs": ["--resume", "{sessionId}", "--fork-session"],
+    "env": {},
+    "order": 0
+  },
+  {
+    "id": "2f9d6b3a-7e1c-4d0b-8a5f-c3e2b1a09d48",
+    "presetId": "codex",
+    "iconId": null,
+    "label": "Codex",
+    "command": "codex",
+    "args": [],
+    "promptTransport": "argv",
+    "promptArgs": [],
+    "resumeArgs": ["resume"],
+    "forkArgs": [],
+    "env": {},
+    "order": 1
+  }
+]

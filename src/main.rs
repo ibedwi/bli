@@ -8,6 +8,7 @@ use bli::github::GitHub;
 use bli::herdr::Herdr;
 use bli::host::LaneHost;
 use bli::process::{ProcessRunner, SystemRunner};
+use bli::superset::Superset;
 use bli::tracker::IssueTracker;
 use bli::Providers;
 
@@ -35,8 +36,10 @@ impl Providers for System {
                         .in_workspace(workspace.as_deref()),
                 ))
             }
-            HostKind::Superset => Err(Error::new("the Superset lane host is not supported yet")
-                .with_hint("set `host = \"herdr\"` under [lane] in bli.toml")),
+            HostKind::Superset => {
+                let workspace = std::env::var("SUPERSET_WORKSPACE_ID").ok();
+                Ok(Box::new(Superset::new(SystemRunner, workspace.as_deref())))
+            }
         }
     }
 

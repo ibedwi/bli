@@ -415,7 +415,12 @@ impl LaneHost for FakeHost {
     }
 
     /// The last `lines` lines of the agent's output, as a host would read them.
-    fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error> {
+    fn read_agent(
+        &self,
+        ticket_id: &str,
+        _workspace: Option<&str>,
+        lines: u32,
+    ) -> Result<String, Error> {
         let output = self
             .agent_output
             .get(ticket_id)

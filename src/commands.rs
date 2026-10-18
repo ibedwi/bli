@@ -176,7 +176,7 @@ fn require_inside(host: &dyn LaneHost) -> Result<(), Error> {
     let name = host.name();
     Err(
         Error::new(format!("not inside {name}, the configured lane host")).with_hint(format!(
-            "run this from a {name} pane, or change `host` under [lane] in bli.toml"
+            "run this from a terminal inside {name}, or change `host` under [lane] in bli.toml"
         )),
     )
 }
@@ -364,7 +364,7 @@ pub fn lane_read(
     json: bool,
 ) -> Result<String, Error> {
     let lane = lane(host, git, config, ticket)?;
-    let output = host.read_agent(&lane.ticket, lines)?;
+    let output = host.read_agent(&lane.ticket, lane.workspace.as_deref(), lines)?;
     if json {
         return Ok(format!(
             "{}\n",

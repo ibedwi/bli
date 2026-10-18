@@ -1,0 +1,2 @@
+Error: Timed out after 20s; agent is blocked
+Hint: Raise --timeout, or check it with `superset terminals read`

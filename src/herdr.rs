@@ -202,7 +202,12 @@ impl<R: ProcessRunner> LaneHost for Herdr<R> {
         }
     }
 
-    fn read_agent(&self, ticket_id: &str, lines: u32) -> Result<String, Error> {
+    fn read_agent(
+        &self,
+        ticket_id: &str,
+        _workspace: Option<&str>,
+        lines: u32,
+    ) -> Result<String, Error> {
         let name = format!("t{ticket_id}");
         let lines = lines.to_string();
         let args = [

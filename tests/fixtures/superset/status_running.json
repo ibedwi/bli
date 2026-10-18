@@ -1,0 +1,13 @@
+{
+  "running": true,
+  "healthy": true,
+  "pid": 48213,
+  "port": 51742,
+  "endpoint": "http://127.0.0.1:51742",
+  "organizationId": "7e3a1c5b-2d9f-4b0e-a6c8-1f4d7b2e9a05",
+  "hostId": "m-3f8a2c1d9e7b",
+  "hostName": "ibedwi-desktop",
+  "hostServiceVersion": "1.38.0",
+  "cloudRegistered": true,
+  "uptimeSec": 3600
+}
